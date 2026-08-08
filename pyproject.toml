@@ -7,7 +7,10 @@ name = "moirai"
 version = "0.1.0"
 description = "Local-first Economic Intelligence Platform"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+]
 
 [project.optional-dependencies]
 dev = [
