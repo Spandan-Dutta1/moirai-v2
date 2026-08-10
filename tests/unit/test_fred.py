@@ -15,10 +15,10 @@ from moirai.core.exceptions import ConfigError, IngestionError
 from moirai.engine.data_fabric.ingestion.base import FetchResult
 from moirai.engine.data_fabric.ingestion.fred import (
     FredAdapter,
-    classify_unit,
     _known_at,
     _parse_date,
     _parse_value,
+    classify_unit,
 )
 from moirai.engine.data_fabric.series.models import (
     Frequency,

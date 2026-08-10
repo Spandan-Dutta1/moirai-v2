@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import date, datetime, UTC
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -35,7 +35,6 @@ import duckdb
 from moirai.core.config import get_settings
 from moirai.core.exceptions import DataFabricError, VintageError
 from moirai.core.logging import get_logger
-from moirai.core.paths import get_paths
 from moirai.engine.data_fabric.series.models import (
     Frequency,
     Observation,

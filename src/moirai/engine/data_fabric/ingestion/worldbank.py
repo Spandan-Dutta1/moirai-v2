@@ -26,7 +26,7 @@ API reference: https://datahelpdesk.worldbank.org/knowledgebase/articles/889392
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any
 
 import httpx

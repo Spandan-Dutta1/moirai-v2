@@ -36,7 +36,17 @@ _RESERVED: frozenset[str] = frozenset(
 ) | {"message", "asctime", "taskName"}
 
 # Ambient context merged into every record: run_id, experiment_hash, layer...
-_context: ContextVar[dict[str, Any]] = ContextVar("moirai_log_context", default={})
+#
+# The default is None rather than {} deliberately. A mutable default on a
+# ContextVar is shared across every context that never calls set(), so an
+# accidental in-place mutation would leak into unrelated runs. None is
+# immutable, and _current() normalises it away at the point of use.
+_context: ContextVar[dict[str, Any] | None] = ContextVar("moirai_log_context", default=None)
+
+
+def _current() -> dict[str, Any]:
+    """Read the ambient context, treating None as empty."""
+    return _context.get() or {}
 
 
 @contextmanager
@@ -49,7 +59,7 @@ def log_context(**fields: Any) -> Iterator[None]:
         with log_context(run_id=run_id, layer="causal"):
             log.info("var_estimated", n_lags=4)
     """
-    token = _context.set({**_context.get(), **fields})
+    token = _context.set({**_current(), **fields})
     try:
         yield
     finally:
@@ -58,7 +68,7 @@ def log_context(**fields: Any) -> Iterator[None]:
 
 def current_context() -> dict[str, Any]:
     """Read the ambient logging context. Returns a copy."""
-    return dict(_context.get())
+    return dict(_current())
 
 
 def _extras(record: logging.LogRecord) -> dict[str, Any]:
@@ -101,7 +111,7 @@ class ContextFilter(logging.Filter):
     """Merge the ambient context into each record before formatting."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        for key, value in _context.get().items():
+        for key, value in _current().items():
             if key not in record.__dict__:
                 record.__dict__[key] = value
         return True

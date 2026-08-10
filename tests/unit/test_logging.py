@@ -192,9 +192,8 @@ def test_context_is_removed_after_the_block(stream):
 def test_nested_contexts_merge_with_inner_winning(stream):
     configure_logging("INFO", json_output=True, stream=stream)
     log = get_logger("demo")
-    with log_context(run_id="run-001", layer="fabric"):
-        with log_context(layer="causal"):
-            log.info("event")
+    with log_context(run_id="run-001", layer="fabric"), log_context(layer="causal"):
+        log.info("event")
 
     record = _json_lines(stream)[0]
     assert record["run_id"] == "run-001"
