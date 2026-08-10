@@ -19,9 +19,9 @@ the assumption is untestable. The honest response is not to hide it but
 to state it, and then to show how much the conclusion depends on it,
 which is what ordering_sensitivity does.
 """
-import math
-from __future__ import annotations
 
+from __future__ import annotations
+import math
 from enum import StrEnum
 from itertools import permutations
 from typing import Any
