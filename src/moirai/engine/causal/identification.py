@@ -21,6 +21,7 @@ which is what ordering_sensitivity does.
 """
 
 from __future__ import annotations
+
 import math
 from enum import StrEnum
 from itertools import permutations
@@ -270,7 +271,8 @@ def ordering_sensitivity(
     if var.n_variables > MAX_VARIABLES_FOR_FULL_SENSITIVITY:
         raise EngineError(
             f"{var.n_variables} variables means "
-            f"{math.factorial(var.n_variables)} orderings; "            f"enumeration is limited to {MAX_VARIABLES_FOR_FULL_SENSITIVITY}"
+            f"{math.factorial(var.n_variables)} orderings; enumeration is "
+            f"limited to {MAX_VARIABLES_FOR_FULL_SENSITIVITY}"
         )
 
     row = var.index_of(response_of)

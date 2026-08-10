@@ -1,6 +1,5 @@
 """Impulse responses for the canonical monetary VAR."""
 
-import numpy as np
 
 from moirai.core.logging import configure_logging
 from moirai.engine.causal.identification import identify_cholesky

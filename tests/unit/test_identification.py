@@ -317,9 +317,10 @@ def test_acceptance_rate_is_between_zero_and_one(var):
 
 def test_more_restrictions_lower_the_acceptance_rate(var):
     loose = identify_sign_restrictions(var, CONTRACTIONARY[:1], SHOCKS, n_draws=2_000)
+    extra = SignRestriction(variable="prices", shock="monetary", sign=Sign.NEGATIVE)
     tight = identify_sign_restrictions(
         var,
-        CONTRACTIONARY + (SignRestriction(variable="prices", shock="monetary", sign=Sign.NEGATIVE),),
+        CONTRACTIONARY + (extra,),
         SHOCKS,
         n_draws=2_000,
     )

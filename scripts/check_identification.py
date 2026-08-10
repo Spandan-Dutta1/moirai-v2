@@ -1,6 +1,5 @@
 """Identify the canonical monetary VAR, and measure how much the ordering matters."""
 
-import numpy as np
 
 from moirai.core.logging import configure_logging
 from moirai.engine.causal.identification import (

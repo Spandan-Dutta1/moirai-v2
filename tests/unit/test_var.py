@@ -18,8 +18,6 @@ import pytest
 from moirai.core.exceptions import EngineError
 from moirai.engine.causal.var import (
     InformationCriterion,
-    LagSelection,
-    StabilityResult,
     check_stability,
     estimate_var,
     forecast,
