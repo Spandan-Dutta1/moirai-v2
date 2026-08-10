@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=4096, gt=0, le=200_000)
     anthropic_api_key: str | None = Field(default=None, repr=False)
 
+    # ---- data sources ----
+    fred_api_key: str | None = Field(default=None, repr=False)
+    http_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
+    http_max_retries: int = Field(default=3, ge=0, le=10)
+
     # ---- validators ----
 
     @field_validator("project_name")
@@ -140,10 +145,16 @@ class Settings(BaseSettings):
     def is_testing(self) -> bool:
         return self.environment is Environment.TESTING
 
+    #: Fields never written to a run ledger or any serialised output.
+    SECRET_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"anthropic_api_key", "fred_api_key"}
+    )
+
     def to_ledger_dict(self) -> dict[str, Any]:
         """Serialisable snapshot for the Run Ledger, with secrets removed."""
         payload = self.model_dump(mode="json")
-        payload.pop("anthropic_api_key", None)
+        for secret in self.SECRET_FIELDS:
+            payload.pop(secret, None)
         return payload
 
 
