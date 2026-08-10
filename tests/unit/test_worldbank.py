@@ -63,7 +63,11 @@ INDICATOR_BODY = [
 ERROR_BODY = [
     {
         "message": [
-            {"id": "120", "key": "Invalid value", "value": "The provided parameter value is not valid"}
+            {
+                "id": "120",
+                "key": "Invalid value",
+                "value": "The provided parameter value is not valid",
+            }
         ]
     }
 ]
