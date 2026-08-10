@@ -61,7 +61,20 @@ def split_hash(prefixed: str) -> tuple[str, str]:
     if not separator or not algorithm or not digest:
         raise IngestionError(f"malformed content hash: {prefixed!r}")
     return algorithm, digest
+def safe_filename_token(value: str, *, max_length: int = 64) -> str:
+    """Reduce an arbitrary identifier to something safe as a filename.
 
+    Source identifiers are not filenames. FRED uses bare codes, but the
+    World Bank uses 'IND/NY.GDP.MKTP.KD.ZG' and other sources use colons
+    or spaces. Any of those would either create unintended directories or
+    be rejected outright by the filesystem.
+
+    Only the archive filename is sanitised. The unmodified identifier is
+    preserved in the provenance sidecar, so nothing is lost.
+    """
+    cleaned = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in value)
+    cleaned = cleaned.strip("._-") or "unnamed"
+    return cleaned[:max_length]
 
 class FetchResult(BaseModel):
     """Raw bytes from a source plus everything needed to prove where they came from.
@@ -126,7 +139,8 @@ class FetchResult(BaseModel):
         root.mkdir(parents=True, exist_ok=True)
 
         _, digest = split_hash(self.content_hash)
-        stem = f"{self.source_series_id}__{self.fetched_at:%Y%m%dT%H%M%SZ}__{digest[:16]}"
+        token = safe_filename_token(self.source_series_id)
+        stem = f"{token}__{self.fetched_at:%Y%m%dT%H%M%SZ}__{digest[:16]}"
 
         payload_path = root / f"{stem}.raw"
         payload_path.write_bytes(self.content)
