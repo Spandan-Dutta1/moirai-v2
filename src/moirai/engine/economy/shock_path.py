@@ -51,11 +51,21 @@ class MacroVariable(StrEnum):
     variable that is computed, reported, and ignored.
     """
 
+
     POLICY_RATE = "policy_rate"
     INFLATION = "inflation"
     INCOME_GROWTH = "income_growth"
     UNEMPLOYMENT = "unemployment"
-
+#: Ranges outside which a macro path is almost certainly a unit error
+#: rather than an economy. Deliberately wide: hyperinflations and
+#: emergency rate settings are real, and this guard exists to catch a
+#: factor of twelve or a hundred, not to police economic plausibility.
+PLAUSIBLE_RANGES: dict[MacroVariable, tuple[float, float]] = {
+    MacroVariable.POLICY_RATE: (-0.05, 1.00),
+    MacroVariable.INFLATION: (-0.30, 2.00),
+    MacroVariable.INCOME_GROWTH: (-0.50, 1.00),
+    MacroVariable.UNEMPLOYMENT: (0.0, 0.80),
+}
 
 class VariableMapping(BaseModel):
     """How one VAR variable becomes one macro variable a household sees.
@@ -199,6 +209,41 @@ class ShockPath(BaseModel):
             },
         }
 
+def _check_plausible(
+    variable: MacroVariable, path: np.ndarray, *, strict: bool
+) -> None:
+    """Reject a path whose magnitude implies a unit error.
+
+    The seam between an impulse response and a household simulation is
+    where unit errors live, and they are silent: every function succeeds,
+    every type is right, and the answer is wrong by a factor of twelve.
+    One such error survived to produce a consumption response of two and a
+    half million percent, because nothing between the layers had an
+    opinion about magnitude.
+
+    The bounds are wide on purpose. What this catches is an already-annual
+    rate multiplied by periods per year, or percentage points read as
+    decimals, which is the mistake that actually happens.
+    """
+    low, high = PLAUSIBLE_RANGES[variable]
+    below, above = float(path.min()), float(path.max())
+
+    if below >= low and above <= high:
+        return
+
+    message = (
+        f"{variable.value} path reaches [{below:.3f}, {above:.3f}], outside "
+        f"the plausible range [{low}, {high}]. Values are decimals, so 0.05 "
+        f"means five percent. A path this large usually means the mapping "
+        f"scale is wrong. Pass check_plausibility=False to proceed anyway."
+    )
+    if strict:
+        raise EngineError(message)
+    log.warning(
+        "implausible_shock_path",
+        variable=variable.value,
+        peak=float(np.max(np.abs(path))),
+    )
 
 def build_shock_path(
     responses: ImpulseResponse,
@@ -208,6 +253,7 @@ def build_shock_path(
     scale: float = 1.0,
     diagnostics: DiagnosticReport | None = None,
     require_usable: bool = True,
+    check_plausibility: bool = True,
 ) -> ShockPath:
     """Turn an impulse response into a macro path households can face.
 
@@ -248,6 +294,11 @@ def build_shock_path(
         deviation = deviation * mapping.scale * scale
 
         paths[mapping.macro_variable] = mapping.baseline + deviation
+        _check_plausible(
+            mapping.macro_variable,
+            paths[mapping.macro_variable],
+            strict=check_plausibility,
+        )
         baselines[mapping.macro_variable] = mapping.baseline
 
     path = ShockPath(
