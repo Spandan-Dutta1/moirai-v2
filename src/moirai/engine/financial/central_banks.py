@@ -502,3 +502,288 @@ def analyse_pair(
         cooperation_gain=round(gain["gain"], 4),
     )
     return result
+# ---- analytic solution ----------------------------------------------------
+
+
+class AnalyticSolution(BaseModel):
+    """An exact equilibrium, solved rather than searched.
+
+    A quadratic loss in a linear economy has linear first order
+    conditions, so the fixed point is the solution of a two by two linear
+    system. That is exact, instant, and unlike a grid it can resolve a
+    difference smaller than the step size, which is what makes the gain
+    from coordination measurable at all.
+
+    It is also more honest about failure. A singular system means the
+    banks' reaction functions are parallel, so either no equilibrium
+    exists or a continuum does, and a grid search would silently return
+    whichever profile the tie-break happened to reach.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rates: dict[str, float]
+    losses: dict[str, float]
+    concept: str
+    condition_number: float = Field(
+        description="Of the reaction system. Large means near-parallel responses."
+    )
+    is_well_conditioned: bool
+    note: str = ""
+
+    @property
+    def total_loss(self) -> float:
+        return sum(self.losses.values())
+
+    def to_ledger_dict(self) -> dict[str, Any]:
+        return {
+            "concept": self.concept,
+            "rates": {k: round(v, 6) for k, v in self.rates.items()},
+            "losses": {k: round(v, 8) for k, v in self.losses.items()},
+            "total_loss": round(self.total_loss, 8),
+            "condition_number": round(self.condition_number, 2),
+            "is_well_conditioned": self.is_well_conditioned,
+            "note": self.note,
+        }
+
+
+def _loss_coefficients(
+    bank: CentralBank,
+    other: CentralBank,
+    spillovers: SpilloverParameters,
+    *,
+    is_home: bool,
+) -> tuple[float, float, float]:
+    """Quadratic coefficients of one bank's loss in (own_rate, other_rate).
+
+    Returns (a, b, c) such that the loss is
+
+        a * own^2 + b * own * other + c * own + constant
+
+    so the first order condition is 2a*own + b*other + c = 0. Derived by
+    substituting the linear transmission equations into the quadratic loss
+    and collecting terms. The band penalty is excluded here because it is
+    piecewise and would break linearity; it is checked afterwards instead.
+    """
+    d_inf = spillovers.domestic_inflation_effect
+    d_out = spillovers.domestic_output_effect
+    demand = spillovers.demand_spillover
+    passthrough = spillovers.exchange_passthrough if bank.external_weight > 0 else 0.0
+
+    # Sign of the exchange rate term depends on which side of the pair.
+    sign = 1.0 if is_home else -1.0
+
+    # inflation = pi0 - d_inf*(r - r0) - sign*passthrough*((r - r0) - (o - o0))
+    inf_own = -(d_inf + sign * passthrough)
+    inf_other = sign * passthrough
+    inf_const = (
+        bank.current_inflation
+        - bank.inflation_target
+        + (d_inf + sign * passthrough) * bank.current_rate
+        - sign * passthrough * other.current_rate
+    )
+
+    # output_gap = -d_out*(r - r0) - demand*(o - o0)
+    out_own = -d_out
+    out_other = -demand
+    out_const = d_out * bank.current_rate + demand * other.current_rate
+
+    wi, wo, we, ws = (
+        bank.inflation_weight,
+        bank.output_weight,
+        bank.external_weight,
+        bank.smoothing_weight,
+    )
+
+    a = wi * inf_own**2 + wo * out_own**2 + we + ws
+    b = 2 * wi * inf_own * inf_other + 2 * wo * out_own * out_other - 2 * we
+    c = (
+        2 * wi * inf_own * inf_const
+        + 2 * wo * out_own * out_const
+        - 2 * ws * bank.current_rate
+    )
+    return a, b, c
+
+
+def analytic_nash(
+    home: CentralBank,
+    foreign: CentralBank,
+    *,
+    spillovers: SpilloverParameters | None = None,
+) -> AnalyticSolution:
+    """Solve the Nash equilibrium exactly.
+
+    Each bank's first order condition is linear in both rates, so the
+    equilibrium solves
+
+        [2a_h   b_h] [r_h]   [-c_h]
+        [b_f   2a_f] [r_f] = [-c_f]
+
+    The condition number is reported because a near-singular system means
+    the two reaction functions are almost parallel, and the equilibrium is
+    then extremely sensitive to the assumed weights. That is worth seeing
+    before quoting the answer to four decimal places.
+    """
+    spillovers = spillovers or SpilloverParameters()
+
+    a_h, b_h, c_h = _loss_coefficients(home, foreign, spillovers, is_home=True)
+    a_f, b_f, c_f = _loss_coefficients(foreign, home, spillovers, is_home=False)
+
+    matrix = np.array([[2 * a_h, b_h], [b_f, 2 * a_f]], dtype=float)
+    rhs = np.array([-c_h, -c_f], dtype=float)
+
+    condition = float(np.linalg.cond(matrix))
+    if not np.isfinite(condition) or condition > 1e10:
+        raise EngineError(
+            f"the reaction system is singular (condition {condition:.2e}). "
+            f"The banks' best responses are parallel, so the equilibrium is "
+            f"either non-existent or a continuum. Check the weights."
+        )
+
+    solution = np.linalg.solve(matrix, rhs)
+    rates = {home.name: float(solution[0]), foreign.name: float(solution[1])}
+
+    losses = _losses_at(home, foreign, solution[0], solution[1], spillovers)
+
+    note = "exact solution of the linear reaction system"
+    for bank, rate in ((home, solution[0]), (foreign, solution[1])):
+        if rate < 0:
+            note += f"; {bank.name} solves to a negative rate, below the usual floor"
+
+    result = AnalyticSolution(
+        rates=rates,
+        losses=losses,
+        concept="nash_analytic",
+        condition_number=condition,
+        is_well_conditioned=condition < 1e4,
+        note=note,
+    )
+
+    log.info(
+        "analytic_nash_solved",
+        home=home.name,
+        foreign=foreign.name,
+        rates={k: round(v, 5) for k, v in rates.items()},
+        condition=round(condition, 1),
+    )
+    return result
+
+
+def analytic_cooperative(
+    home: CentralBank,
+    foreign: CentralBank,
+    *,
+    spillovers: SpilloverParameters | None = None,
+) -> AnalyticSolution:
+    """Minimise the sum of the two losses exactly.
+
+    The cooperative problem differs from Nash in one term: each bank now
+    internalises the effect of its rate on the other's loss. That cross
+    term is what the Nash solution ignores, and the gap between the two is
+    the value of a coordination agreement neither can credibly commit to.
+    """
+    spillovers = spillovers or SpilloverParameters()
+
+    a_h, b_h, c_h = _loss_coefficients(home, foreign, spillovers, is_home=True)
+    a_f, b_f, c_f = _loss_coefficients(foreign, home, spillovers, is_home=False)
+
+    # Joint loss: differentiate the sum with respect to each rate. Each
+    # bank now also sees the other's cross term, which is what Nash omits.
+    matrix = np.array(
+        [[2 * a_h, b_h + b_f], [b_h + b_f, 2 * a_f]], dtype=float
+    )
+    rhs = np.array([-c_h, -c_f], dtype=float)
+
+    condition = float(np.linalg.cond(matrix))
+    if not np.isfinite(condition) or condition > 1e10:
+        raise EngineError(f"the joint problem is singular (condition {condition:.2e})")
+
+    solution = np.linalg.solve(matrix, rhs)
+
+    return AnalyticSolution(
+        rates={home.name: float(solution[0]), foreign.name: float(solution[1])},
+        losses=_losses_at(home, foreign, solution[0], solution[1], spillovers),
+        concept="cooperative_analytic",
+        condition_number=condition,
+        is_well_conditioned=condition < 1e4,
+        note="minimises the joint loss; not individually rational in general",
+    )
+
+
+def _losses_at(
+    home: CentralBank,
+    foreign: CentralBank,
+    home_rate: float,
+    foreign_rate: float,
+    spillovers: SpilloverParameters,
+) -> dict[str, float]:
+    """Realised losses at a rate pair, including any band penalty."""
+    home_move = home_rate - home.current_rate
+    foreign_move = foreign_rate - foreign.current_rate
+    differential = home_move - foreign_move
+
+    home_inflation = (
+        home.current_inflation
+        - spillovers.domestic_inflation_effect * home_move
+        - spillovers.exchange_passthrough * differential * (home.external_weight > 0)
+    )
+    foreign_inflation = (
+        foreign.current_inflation
+        - spillovers.domestic_inflation_effect * foreign_move
+        + spillovers.exchange_passthrough * differential * (foreign.external_weight > 0)
+    )
+    home_output = (
+        -spillovers.domestic_output_effect * home_move
+        - spillovers.demand_spillover * foreign_move
+    )
+    foreign_output = (
+        -spillovers.domestic_output_effect * foreign_move
+        - spillovers.demand_spillover * home_move
+    )
+
+    gap = abs(home_rate - foreign_rate)
+    return {
+        home.name: home.loss(
+            home_inflation,
+            home_output,
+            home_rate,
+            external_gap=gap if home.external_weight > 0 else 0.0,
+        ),
+        foreign.name: foreign.loss(
+            foreign_inflation,
+            foreign_output,
+            foreign_rate,
+            external_gap=gap if foreign.external_weight > 0 else 0.0,
+        ),
+    }
+
+
+def coordination_value(
+    home: CentralBank,
+    foreign: CentralBank,
+    *,
+    spillovers: SpilloverParameters | None = None,
+) -> dict[str, Any]:
+    """The exact gain from coordinating, and who captures it.
+
+    A grid cannot resolve a gain smaller than its step size, which for
+    twenty five basis points is most of the gains that actually arise
+    between central banks in normal conditions. Solving exactly is what
+    makes the question answerable.
+    """
+    nash = analytic_nash(home, foreign, spillovers=spillovers)
+    cooperative = analytic_cooperative(home, foreign, spillovers=spillovers)
+
+    by_bank = {
+        name: nash.losses[name] - cooperative.losses[name]
+        for name in nash.losses
+    }
+
+    return {
+        "nash_rates": nash.rates,
+        "cooperative_rates": cooperative.rates,
+        "total_gain": nash.total_loss - cooperative.total_loss,
+        "gain_by_bank": by_bank,
+        "someone_loses": any(value < 0 for value in by_bank.values()),
+        "well_conditioned": nash.is_well_conditioned and cooperative.is_well_conditioned,
+    }
