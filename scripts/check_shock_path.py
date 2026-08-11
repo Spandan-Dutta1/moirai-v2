@@ -23,7 +23,7 @@ with FredAdapter() as fred:
         prepared.append(
             prepare(
                 fred.fetch_series(
-                    code, observation_start="1960-01-01", observation_end="2019-12-01"
+                    code, observation_start="1985-01-01", observation_end="2007-06-01"
                 )
             )
         )
@@ -55,7 +55,7 @@ path = build_shock_path(
     mappings,
     scale=1.0,
     diagnostics=report,
-    require_usable=False,  # recorded in the ledger
+    require_usable=True,
 )
 
 print("MACRO PATH AFTER A ONE STANDARD DEVIATION TIGHTENING")
