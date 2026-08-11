@@ -205,41 +205,33 @@ change = (shock_total - base_total) / np.maximum(base_total, 1.0)
 aggregate = (shock_total.sum() / base_total.sum() - 1) * 100
 
 # ---------------------------------------------------------------- result
-rule("RESULT  Who bears an RBI tightening?")
+rule("RESULT  Withheld: the shock is not credibly identified")
 
-print(f"  aggregate consumption change : {aggregate:+.3f}%")
-print(
-    f"  additional job losses        : "
-    f"{sum(int(o.became_unemployed.sum()) for o in shocked) - sum(int(o.became_unemployed.sum()) for o in baseline):,}"
-)
+output_peak_h, output_peak = irf.peak("in_iip_yoy", shock)
+
+print(f"  The output response to a policy tightening peaks at "
+      f"{output_peak:+.3f} percentage points at h={output_peak_h}.")
 print()
-
-quintile = population.quantile_groups(population.income, 5)
-print(f"  {'income quintile':>16}  {'consumption':>13}  {'% rate exposed':>15}")
-for q in range(5):
-    mask = quintile == q
-    print(
-        f"  {q + 1:>16}  {change[mask].mean() * 100:>12.3f}%  "
-        f"{population.is_rate_exposed[mask].mean():>14.1%}"
-    )
+print("  Output rising after a rate rise is not a monetary transmission.")
+print("  It is the RBI tightening into expected strength, which a three")
+print("  variable VAR cannot separate from the tightening causing that")
+print("  strength. Adding the ten year yield did not move the sign in any")
+print("  of four specifications, so this is a robust feature of what a")
+print("  recursive VAR extracts from these 170 observations, not noise.")
 print()
-
-print(f"  {'by exposure':>26}  {'consumption':>13}  {'households':>12}")
-for label, mask in [
-    ("floating-rate borrowers", population.is_rate_exposed),
-    ("fixed-rate borrowers", population.is_indebted & ~population.debt_is_floating),
-    ("net savers", ~population.is_indebted),
-]:
-    print(
-        f"  {label:>26}  {change[mask].mean() * 100:>12.3f}%  "
-        f"{int(mask.sum()):>12,}"
-    )
-
+print("  The distributional simulation therefore runs but its output is")
+print("  withheld. A shock that makes households richer would produce a")
+print("  distributional result, and it would be meaningless.")
 print()
-print("  Indian mortgages are predominantly floating rate, unlike the US")
-print("  where fixed rate lending insulates most borrowers. That makes the")
-print("  transmission channel through debt service stronger here.")
-
+print("  What this pipeline does establish:")
+print("    - a published spreadsheet ingests with full provenance")
+print("    - the preparation layer read the declared units and correctly")
+print("      declined to difference two already-differenced series")
+print("    - the seam converts an impulse response into household inputs")
+print("      with a guard that catches unit errors")
+print("    - the specification gate and the plausibility guard both fired")
+print()
+print("  See ADR 007. The credibly identified chain is run_pipeline.py.")
 # ---------------------------------------------------------- provenance
 rule("PROVENANCE AND LIMITATIONS")
 
