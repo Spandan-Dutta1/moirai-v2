@@ -74,7 +74,17 @@ class PopulationParameters(BaseModel):
     # ---- wealth: log-normal, wider, correlated with income ----
     log_wealth_mean: float = Field(default=12.0)
     log_wealth_sd: float = Field(default=1.6, gt=0, le=4.0)
-    income_wealth_correlation: float = Field(default=0.6, ge=-1.0, le=1.0)
+    income_wealth_correlation: float = Field(
+        default=0.85,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "High: the bottom of the income distribution holds very little "
+            "liquid wealth. A weak correlation produces poor households with "
+            "large savings buffers, which removes hand-to-mouth behaviour and "
+            "makes rate rises look progressive."
+        ),
+    )
 
     # ---- debt ----
     share_with_debt: float = Field(default=0.45, ge=0.0, le=1.0)
@@ -85,6 +95,18 @@ class PopulationParameters(BaseModel):
         ge=0.0,
         le=1.0,
         description="Indian mortgages are predominantly floating, unlike the US.",
+    )
+    debt_peak_income_rank: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description="Income percentile where borrowing propensity peaks.",
+    )
+    debt_rank_spread: float = Field(
+        default=0.28,
+        gt=0.0,
+        le=1.0,
+        description="Width of the borrowing hump across the income distribution.",
     )
 
     # ---- labour ----
@@ -413,10 +435,21 @@ def generate_population(parameters: PopulationParameters | None = None) -> Popul
     income[employment == EmploymentStatus.OUT_OF_LABOUR_FORCE] *= 0.30
 
     # ---- debt ----
-    has_debt = rng.random(n) < parameters.share_with_debt
+    # Borrowing is hump-shaped in income. The poorest are credit
+    # constrained and cannot borrow much regardless of want; the middle and
+    # upper-middle borrow most, typically against housing; the wealthiest
+    # need less leverage because they can buy outright. A flat borrowing
+    # probability makes rate exposure uniform across the distribution,
+    # which removes the mechanism that makes monetary policy regressive.
+    income_rank = np.argsort(np.argsort(income)) / max(n - 1, 1)
+    borrowing_propensity = np.exp(
+        -((income_rank - parameters.debt_peak_income_rank) ** 2)
+        / (2 * parameters.debt_rank_spread**2)
+    )
+    has_debt = rng.random(n) < parameters.share_with_debt * borrowing_propensity
+
     # Older households have paid more of it down.
     has_debt &= rng.random(n) > np.clip((age - 30) / 60.0, 0.0, 0.8)
-
     ratio = rng.lognormal(
         np.log(parameters.debt_to_income_mean), parameters.debt_to_income_sd, size=n
     )
