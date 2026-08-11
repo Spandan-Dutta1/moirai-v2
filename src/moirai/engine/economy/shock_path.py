@@ -352,3 +352,51 @@ def monetary_mappings(
             baseline=baseline_income_growth,
         ),
     )
+def yoy_percentage_point_mappings(
+    rate_variable: str,
+    inflation_variable: str,
+    growth_variable: str,
+    *,
+    baseline_rate: float,
+    baseline_inflation: float,
+    baseline_income_growth: float,
+) -> tuple[VariableMapping, ...]:
+    """Mappings for a VAR whose variables are already annual rates.
+
+    RBI publishes industrial production and CPI as year-on-year percent
+    changes, so an impulse response of -0.16 means -0.16 percentage points
+    per annum. The only conversion needed is percentage points to decimal.
+
+    This differs from monetary_mappings, which assumes log-differenced
+    levels and annualises by multiplying by the periods per year. Applying
+    that here multiplies an already annual rate by twelve, which produces
+    inflation paths in the hundreds of percent. The two mapping sets exist
+    separately because the error is silent: the arithmetic succeeds and
+    only the magnitude is absurd.
+    """
+    return (
+        VariableMapping(
+            var_variable=rate_variable,
+            macro_variable=MacroVariable.POLICY_RATE,
+            transformation=Transformation.DIFFERENCE,
+            scale=0.01,
+            cumulate=True,  # the VAR modelled the change in the rate
+            baseline=baseline_rate,
+        ),
+        VariableMapping(
+            var_variable=inflation_variable,
+            macro_variable=MacroVariable.INFLATION,
+            transformation=Transformation.NONE,
+            scale=0.01,
+            cumulate=False,  # already a level, in rate space
+            baseline=baseline_inflation,
+        ),
+        VariableMapping(
+            var_variable=growth_variable,
+            macro_variable=MacroVariable.INCOME_GROWTH,
+            transformation=Transformation.NONE,
+            scale=0.01,
+            cumulate=False,
+            baseline=baseline_income_growth,
+        ),
+    )
