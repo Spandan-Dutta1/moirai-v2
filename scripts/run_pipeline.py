@@ -65,12 +65,10 @@ for item in series:
         f"{item.metadata.frequency.value:<10} {item.metadata.unit.value:<16} "
         f"{item.metadata.seasonal_adjustment.value}"
     )
-print(f"\n  stored in the warehouse: {len(stored)} series")
+print(f"\n  warehouse now holds {len(stored)} series "
+      f"({len(series)} fetched by this run)")
 print("  raw responses archived with sha256 content hashes")
-print("\n  note: the price level response is positive, which is the price")
-print("  puzzle (Eichenbaum 1992). Adding a commodity price index, the")
-print("  standard fix, did not resolve it on this sample and cost")
-print("  specification validity. The anomaly is small and left stated.")
+
 
 # ---------------------------------------------------------------- Layer 1
 rule("LAYER 1  Causal Intelligence")
@@ -119,11 +117,15 @@ for h in (6, 12, 24, 36):
     row = "  ".join(f"{cumulative.responses[h, i, 2] * 100:>10.3f}" for i in range(3))
     print(f"  {h:>4}  {row}")
 
+print("\n  note: the price level response is positive, which is the price")
+print("  puzzle (Eichenbaum 1992). Adding a commodity price index, the")
+print("  standard fix, did not resolve it on this sample and cost")
+print("  specification validity. The anomaly is small and left stated.")
+
 print("\n  share of forecast error variance explained by the policy shock at h=36")
 for i, name in enumerate(names):
     print(f"    {name:<12} {fevd.shares[HORIZON, i, 2]:.1%}")
 print("    a clearly signed effect can still be a small one")
-
 # ------------------------------------------------------------ the seam
 rule("SEAM  Impulse response to household-facing macro path")
 
