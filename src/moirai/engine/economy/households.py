@@ -386,7 +386,9 @@ def generate_population(parameters: PopulationParameters | None = None) -> Popul
     peak_earning_age = 45.0
     age_factor = 1.0 - 0.00035 * (age - peak_earning_age) ** 2
     income = income * np.clip(age_factor, 0.35, 1.0)
-    wealth = wealth * (0.35 + 0.9 * (age - parameters.min_age) / (parameters.max_age - parameters.min_age))
+    age_span = parameters.max_age - parameters.min_age
+    age_position = (age - parameters.min_age) / age_span
+    wealth = wealth * (0.35 + 0.9 * age_position)
 
     # ---- employment ----
     employment = np.full(n, EmploymentStatus.EMPLOYED, dtype=np.int8)

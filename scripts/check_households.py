@@ -20,7 +20,8 @@ print()
 
 print("INCOME QUINTILES")
 quintile = population.quantile_groups(population.income, 5)
-print(f"{'group':>8}  {'mean income':>14}  {'mean wealth':>14}  {'% indebted':>11}  {'% floating':>11}")
+header = f"{'group':>8}  {'mean income':>14}  {'mean wealth':>14}"
+print(header + f"  {'% indebted':>11}  {'% floating':>11}")
 for g in range(5):
     mask = quintile == g
     print(
@@ -34,7 +35,8 @@ print()
 print("WHO IS EXPOSED TO A RATE RISE")
 exposed = population.subset(population.is_rate_exposed)
 print(f"  households      : {len(exposed):,} ({len(exposed) / len(population):.1%})")
-print(f"  mean income     : {exposed.income.mean():,.0f}  (population {population.income.mean():,.0f})")
+print(f"  mean income     : {exposed.income.mean():,.0f}")
+print(f"  population mean : {population.income.mean():,.0f}")
 print(f"  mean debt       : {exposed.debt.mean():,.0f}")
 print(f"  mean debt/income: {np.median(exposed.debt_to_income):.2f}")
 print(f"  mean age        : {exposed.age.mean():.1f}")

@@ -92,17 +92,16 @@ class VariableMapping(BaseModel):
             Transformation.LOG_DIFFERENCE,
             Transformation.PERCENT_CHANGE,
         }
-        if self.transformation in differenced and not self.cumulate:
-            if self.macro_variable in (
-                MacroVariable.POLICY_RATE,
-                MacroVariable.UNEMPLOYMENT,
-            ):
-                raise ValueError(
-                    f"{self.macro_variable.value} is a level, but "
-                    f"{self.var_variable} was {self.transformation.value}. "
-                    f"Set cumulate=True or the path will describe changes, "
-                    f"not levels."
-                )
+        if self.transformation in differenced and not self.cumulate and self.macro_variable in (
+            MacroVariable.POLICY_RATE,
+            MacroVariable.UNEMPLOYMENT,
+        ):
+            raise ValueError(
+                f"{self.macro_variable.value} is a level, but "
+                f"{self.var_variable} was {self.transformation.value}. "
+                f"Set cumulate=True or the path will describe changes, "
+                f"not levels."
+            )
         return self
 
 
