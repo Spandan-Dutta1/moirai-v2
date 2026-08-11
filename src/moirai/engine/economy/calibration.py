@@ -222,14 +222,16 @@ URBAN_INDIA_MOMENTS: tuple[Moment, ...] = (
     ),
     Moment(
         name="employment_rate",
-        target=0.47,
-        tolerance=0.06,
-        source="Periodic Labour Force Survey, worker population ratio",
-        confidence=Confidence.UNSOURCED,
+        target=0.494,
+        tolerance=0.05,
+        source="PLFS 2023-24 (July 2023 - June 2024), urban WPR, age 15 and above",
+        confidence=Confidence.SOURCED,
         note=(
-            "The PLFS worker population ratio is the right concept but the "
-            "exact figure has not been checked against the published series. "
-            "Treated as provisional."
+            "Worker population ratio for urban India, persons aged 15 and "
+            "above, which rose from 43.9 percent in 2017-18. The all-ages "
+            "urban figure is lower at 47.6 percent for calendar 2024; the "
+            "15-plus measure is used because this model's population starts "
+            "at 18."
         ),
     ),
     Moment(

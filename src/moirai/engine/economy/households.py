@@ -117,7 +117,16 @@ class PopulationParameters(BaseModel):
     )
 
     # ---- labour ----
-    unemployment_rate: float = Field(default=0.07, ge=0.0, le=0.5)
+    unemployment_rate: float = Field(
+        default=0.051,
+        ge=0.0,
+        le=0.5,
+        description=(
+            "Urban India, PLFS 2023-24, persons aged 15 and above. The "
+            "current weekly status measure is higher at around 6.7 percent; "
+            "this is the usual status figure."
+        ),
+    )
     out_of_labour_force_rate: float = Field(default=0.35, ge=0.0, le=0.9)
 
     # ---- beliefs and preferences ----
