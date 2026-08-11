@@ -260,13 +260,24 @@ def job_loss_probability(
 
     # Income rank in [0, 1], then a linear gradient normalised to preserve
     # the average hazard implied by Okun's law.
-    rank = np.argsort(np.argsort(population.income)) / max(len(population) - 1, 1)
+    # Rank within the labour force only. Ranking over everyone would place
+    # retirees, whose income is reduced by construction, at the bottom of
+    # the distribution, so the gradient would be measured against a
+    # denominator that includes people who cannot lose a job.
+    in_labour_force = population.is_in_labour_force
+    n_active = int(in_labour_force.sum())
+    if n_active == 0:
+        return np.zeros(len(population))
+
+    hazard = np.zeros(len(population))
+    active_income = population.income[in_labour_force]
+    rank = np.argsort(np.argsort(active_income)) / max(n_active - 1, 1)
+
     gradient = parameters.job_loss_income_gradient
-    relative = gradient - (gradient - 1.0) * rank  # high at low income
+    relative = gradient - (gradient - 1.0) * rank  # highest at low income
     relative = relative / relative.mean()
 
-    hazard = average_hazard * relative
-    hazard[~population.is_in_labour_force] = 0.0
+    hazard[in_labour_force] = average_hazard * relative
     return np.clip(hazard, 0.0, 1.0)
 
 
