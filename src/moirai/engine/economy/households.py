@@ -72,17 +72,24 @@ class PopulationParameters(BaseModel):
     log_income_sd: float = Field(default=0.85, gt=0, le=3.0)
 
     # ---- wealth: log-normal, wider, correlated with income ----
-    log_wealth_mean: float = Field(default=12.0)
+    log_wealth_mean: float = Field(
+        default=10.0,
+        description=(
+            "Fitted by grid search against the moment set in calibration.py. "
+            "The prior default of 12.0 produced a hand-to-mouth share of 0.7 "
+            "percent against a target near 40, which muted the consumption "
+            "channel almost entirely."
+        ),
+    )
     log_wealth_sd: float = Field(default=1.6, gt=0, le=4.0)
     income_wealth_correlation: float = Field(
-        default=0.85,
+        default=0.5,
         ge=-1.0,
         le=1.0,
         description=(
-            "High: the bottom of the income distribution holds very little "
-            "liquid wealth. A weak correlation produces poor households with "
-            "large savings buffers, which removes hand-to-mouth behaviour and "
-            "makes rate rises look progressive."
+            "Fitted by grid search rather than chosen. An earlier value of "
+            "0.85 was picked because it moved the distributional result in an "
+            "expected direction, which is fitting a parameter to a conclusion."
         ),
     )
 
