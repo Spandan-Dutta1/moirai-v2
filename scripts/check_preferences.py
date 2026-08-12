@@ -47,6 +47,8 @@ q_rates = to_quarterly(rates)
 q_inflation = to_quarterly(inflation)
 q_output = to_quarterly(output)
 
+print(f"sample: {cpi_periods[12]} to {cpi_periods[12 + n - 1]}")
+print(f"  {n} months aggregated to {len(q_rates)} quarters")
 print(f"  mean funds rate {q_rates.mean():.2%}, mean inflation {q_inflation.mean():.2%}")
 print()
 
