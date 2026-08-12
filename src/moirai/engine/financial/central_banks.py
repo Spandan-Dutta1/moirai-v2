@@ -41,7 +41,7 @@ the economy.
 """
 
 from __future__ import annotations
-
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -805,4 +805,190 @@ def coordination_value(
         "gain_by_bank": by_bank,
         "someone_loses": any(value < 0 for value in by_bank.values()),
         "well_conditioned": nash.is_well_conditioned and cooperative.is_well_conditioned,
+    }
+
+# ---- sensitivity to the assumed weights ------------------------------------
+
+
+class WeightSensitivity(BaseModel):
+    """How an equilibrium moves as an assumed weight varies.
+
+    The mandates in this module are published and the transmission
+    parameters are estimable, but the preference weights are neither. How
+    much a central bank dislikes a point of output gap relative to a point
+    of inflation is not a quantity anyone has measured, and a conclusion
+    that depends sharply on it is a conclusion about the assumption.
+
+    This is the same exercise as ordering sensitivity in the causal layer.
+    A result that holds across the plausible range is robust. A result that
+    changes sign inside it means the weight is doing the work, and the
+    honest report is the range rather than the point.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    bank: str
+    parameter: str
+    values: tuple[float, ...]
+    rates: tuple[float, ...] = Field(description="Equilibrium rate at each value.")
+    moves: tuple[float, ...] = Field(description="Basis points from the current rate.")
+    baseline_value: float
+    baseline_rate: float
+
+    @property
+    def rate_range(self) -> tuple[float, float]:
+        return min(self.rates), max(self.rates)
+
+    @property
+    def spread_bp(self) -> float:
+        return (max(self.rates) - min(self.rates)) * 10_000
+
+    @property
+    def sign_flips(self) -> bool:
+        """Does the direction of the policy move change across the range?"""
+        signs = {np.sign(m) for m in self.moves if abs(m) > 1.0}
+        return len(signs) > 1
+
+    @property
+    def is_robust(self) -> bool:
+        """No sign change and the spread stays under fifty basis points.
+
+        Fifty is two standard policy increments. A conclusion that survives
+        that much variation in an unmeasured parameter is worth quoting; one
+        that does not should be reported as a range.
+        """
+        return not self.sign_flips and self.spread_bp < 50.0
+
+    def to_ledger_dict(self) -> dict[str, Any]:
+        return {
+            "bank": self.bank,
+            "parameter": self.parameter,
+            "baseline_value": self.baseline_value,
+            "baseline_rate": round(self.baseline_rate, 6),
+            "rate_range": [round(r, 6) for r in self.rate_range],
+            "spread_bp": round(self.spread_bp, 1),
+            "sign_flips": self.sign_flips,
+            "is_robust": self.is_robust,
+            "values": list(self.values),
+            "rates": [round(r, 6) for r in self.rates],
+        }
+
+
+def weight_sensitivity(
+    home: CentralBank,
+    foreign: CentralBank,
+    *,
+    vary: str,
+    on: str,
+    values: Sequence[float],
+    observe: str | None = None,
+    spillovers: SpilloverParameters | None = None,
+) -> WeightSensitivity:
+    """Re-solve the equilibrium across a range of one assumed weight.
+
+    Parameters
+    ----------
+    vary
+        Which weight to vary, for example "external_weight".
+    on
+        Which bank's weight is varied, by name.
+    observe
+        Whose equilibrium rate to report. Defaults to the bank whose weight
+        is being varied, but the interesting case is often the other one:
+        the question is usually whether *my* assumption about the RBI
+        changes what the *Fed* does.
+    """
+    banks = {home.name: home, foreign.name: foreign}
+    if on not in banks:
+        raise EngineError(f"no bank named {on!r}; have {sorted(banks)}")
+    if not hasattr(banks[on], vary):
+        raise EngineError(f"{vary!r} is not a weight on CentralBank")
+    if len(values) == 0:
+        raise EngineError("at least one value is required")
+    observed = observe or on
+    if observed not in banks:
+        raise EngineError(f"cannot observe {observed!r}; have {sorted(banks)}")
+
+    rates: list[float] = []
+    for value in values:
+        adjusted = banks[on].model_copy(update={vary: value})
+        pair = (
+            (adjusted, foreign) if on == home.name else (home, adjusted)
+        )
+        solution = analytic_nash(*pair, spillovers=spillovers)
+        rates.append(solution.rates[observed])
+
+    baseline_value = float(getattr(banks[on], vary))
+    baseline = analytic_nash(home, foreign, spillovers=spillovers)
+    current = banks[observed].current_rate
+
+    result = WeightSensitivity(
+        bank=observed,
+        parameter=f"{on}.{vary}",
+        values=tuple(float(v) for v in values),
+        rates=tuple(rates),
+        moves=tuple((r - current) * 10_000 for r in rates),
+        baseline_value=baseline_value,
+        baseline_rate=baseline.rates[observed],
+    )
+
+    log.info(
+        "weight_sensitivity_computed",
+        varied=result.parameter,
+        observed=observed,
+        spread_bp=round(result.spread_bp, 1),
+        robust=result.is_robust,
+    )
+    return result
+
+
+def sensitivity_report(
+    home: CentralBank,
+    foreign: CentralBank,
+    *,
+    spillovers: SpilloverParameters | None = None,
+    n_points: int = 9,
+) -> dict[str, Any]:
+    """Vary every assumed weight in turn and report which results survive.
+
+    The ranges are deliberately wide. A narrow range around the chosen
+    value would flatter the model: the point is to find out whether the
+    conclusion holds across values another analyst might reasonably have
+    picked, not to confirm that small perturbations do little.
+    """
+    ranges = {
+        "output_weight": np.linspace(0.1, 1.5, n_points),
+        "external_weight": np.linspace(0.0, 0.8, n_points),
+        "smoothing_weight": np.linspace(0.0, 0.6, n_points),
+    }
+
+    results: list[WeightSensitivity] = []
+    for bank in (home, foreign):
+        for parameter, values in ranges.items():
+            # Skip a weight the bank does not use: varying the Fed's
+            # external weight from a baseline of zero is a different
+            # question, and it is asked explicitly below.
+            if parameter == "external_weight" and getattr(bank, parameter) == 0.0:
+                continue
+            for observed in (home.name, foreign.name):
+                results.append(
+                    weight_sensitivity(
+                        home,
+                        foreign,
+                        vary=parameter,
+                        on=bank.name,
+                        values=values,
+                        observe=observed,
+                        spillovers=spillovers,
+                    )
+                )
+
+    fragile = [r for r in results if not r.is_robust]
+    return {
+        "n_checks": len(results),
+        "n_robust": sum(1 for r in results if r.is_robust),
+        "fragile": [r.to_ledger_dict() for r in fragile],
+        "worst_spread_bp": max((r.spread_bp for r in results), default=0.0),
+        "any_sign_flip": any(r.sign_flips for r in results),
+        "results": [r.to_ledger_dict() for r in results],
     }
