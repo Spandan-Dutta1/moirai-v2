@@ -675,41 +675,60 @@ def analytic_cooperative(
     *,
     spillovers: SpilloverParameters | None = None,
 ) -> AnalyticSolution:
-    """Minimise the sum of the two losses exactly.
+    """Minimise the sum of the two losses.
 
-    The cooperative problem differs from Nash in one term: each bank now
-    internalises the effect of its rate on the other's loss. That cross
-    term is what the Nash solution ignores, and the gap between the two is
-    the value of a coordination agreement neither can credibly commit to.
+    Solved numerically rather than by hand-derived first order conditions.
+    An earlier version differentiated the joint objective analytically and
+    got the cross terms wrong, which produced a cooperative outcome worse
+    than Nash. That is impossible by construction, since the cooperative
+    problem minimises over a superset of what each bank controls
+    individually, so the error was visible only because the impossibility
+    was checked. It is now asserted below rather than assumed.
+
+    The joint loss is smooth and low dimensional, so Nelder-Mead from the
+    Nash point converges immediately and does not require the gradient
+    that was the source of the mistake.
     """
+    from scipy.optimize import minimize
+
     spillovers = spillovers or SpilloverParameters()
+    nash = analytic_nash(home, foreign, spillovers=spillovers)
 
-    a_h, b_h, c_h = _loss_coefficients(home, foreign, spillovers, is_home=True)
-    a_f, b_f, c_f = _loss_coefficients(foreign, home, spillovers, is_home=False)
+    def joint_loss(rates: np.ndarray) -> float:
+        losses = _losses_at(home, foreign, float(rates[0]), float(rates[1]), spillovers)
+        return sum(losses.values())
 
-    # Joint loss: differentiate the sum with respect to each rate. Each
-    # bank now also sees the other's cross term, which is what Nash omits.
-    matrix = np.array(
-        [[2 * a_h, b_h + b_f], [b_h + b_f, 2 * a_f]], dtype=float
-    )
-    rhs = np.array([-c_h, -c_f], dtype=float)
+    start = np.array([nash.rates[home.name], nash.rates[foreign.name]])
+    result = minimize(joint_loss, start, method="Nelder-Mead", tol=1e-12)
 
-    condition = float(np.linalg.cond(matrix))
-    if not np.isfinite(condition) or condition > 1e10:
-        raise EngineError(f"the joint problem is singular (condition {condition:.2e})")
+    if not result.success:
+        raise EngineError(f"joint minimisation failed: {result.message}")
 
-    solution = np.linalg.solve(matrix, rhs)
+    home_rate, foreign_rate = float(result.x[0]), float(result.x[1])
+    losses = _losses_at(home, foreign, home_rate, foreign_rate, spillovers)
+
+    # The cooperative solution optimises over both rates jointly, so it
+    # cannot be worse than an equilibrium in which each bank optimises over
+    # one. A violation means the solver failed or the loss is not what the
+    # Nash solver assumed it was.
+    if sum(losses.values()) > nash.total_loss + 1e-9:
+        raise EngineError(
+            f"cooperative joint loss {sum(losses.values()):.9f} exceeds the "
+            f"Nash joint loss {nash.total_loss:.9f}, which is impossible. "
+            f"The two solvers disagree about the objective."
+        )
 
     return AnalyticSolution(
-        rates={home.name: float(solution[0]), foreign.name: float(solution[1])},
-        losses=_losses_at(home, foreign, solution[0], solution[1], spillovers),
-        concept="cooperative_analytic",
-        condition_number=condition,
-        is_well_conditioned=condition < 1e4,
-        note="minimises the joint loss; not individually rational in general",
+        rates={home.name: home_rate, foreign.name: foreign_rate},
+        losses=losses,
+        concept="cooperative_numeric",
+        condition_number=nash.condition_number,
+        is_well_conditioned=nash.is_well_conditioned,
+        note=(
+            "minimises the joint loss by direct search; not individually "
+            "rational in general, so it is not self-enforcing"
+        ),
     )
-
-
 def _losses_at(
     home: CentralBank,
     foreign: CentralBank,
