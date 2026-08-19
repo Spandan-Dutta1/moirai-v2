@@ -41,6 +41,7 @@ the economy.
 """
 
 from __future__ import annotations
+
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any
@@ -53,7 +54,6 @@ from moirai.core.logging import get_logger
 from moirai.engine.financial.game import (
     Confidence,
     Game,
-    Outcome,
     Player,
     cooperation_gain,
     nash_equilibria,
@@ -218,16 +218,22 @@ FED = CentralBank(
     target_measure="PCE price index",
     mandate_source=_FED_SOURCE,
     inflation_weight=1.0,
-    output_weight=1.0,
+    output_weight=0.40,
     external_weight=0.0,
+    weight_confidence=Confidence.DERIVED,
     smoothing_weight=0.15,
     weight_note=(
-        "Output weight equal to inflation weight because the mandate is "
-        "coequal rather than hierarchical. The Fed publishes no numeric "
-        "employment target, holding that maximum employment is not directly "
-        "measurable, so this weight cannot be calibrated the way the "
-        "inflation target can. External weight is zero: the dollar's reserve "
-        "status means the Fed faces little external constraint."
+        "Derived rather than assumed. A partial-adjustment policy rule fitted "
+        "to the observed funds rate over 1986-2007 at quarterly frequency "
+        "gives an output response of 0.372 against an inflation response of "
+        "0.153. Three qualifications: the rule explains twelve percent of "
+        "quarterly rate changes; the HP-filtered variant did not produce an "
+        "interior estimate and the two detrending methods disagree by 0.29; "
+        "and the sample is the Great Moderation, when inflation was near "
+        "target throughout, which gives the inflation gap little variation "
+        "and makes a dual-mandate bank look output-focused. The earlier "
+        "assumed value of 1.00 moved the equilibrium by 145 basis points "
+        "across its plausible range, which is why it was worth estimating."
     ),
     current_rate=0.0425,
     current_inflation=0.030,

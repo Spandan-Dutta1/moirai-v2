@@ -223,10 +223,8 @@ def test_negative_wealth_earns_nothing_rather_than_negative(parameters):
 
 def test_deposits_track_policy_less_than_borrowing_does():
     """The other half of the transfer: borrowers pay more than savers receive."""
-    people = two_households(wealth=(1_000_000.0, 0.0), debt=(1_000_000.0, 0.0), floating=(True, False))
     parameters = BehaviourParameters()
     assert parameters.deposit_pass_through < parameters.floating_pass_through
-
 
 # --- job loss --------------------------------------------------------------
 

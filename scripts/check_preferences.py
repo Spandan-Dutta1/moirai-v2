@@ -64,8 +64,8 @@ estimates = compare_detrending(
 )
 
 print("ESTIMATED POLICY RULE")
-print(f"  target = r* + pi + a*(pi - pi*) + b*gap")
-print(f"  observed change = speed * (target - previous rate)")
+print("  target = r* + pi + a*(pi - pi*) + b*gap")
+print("  observed change = speed * (target - previous rate)")
 print()
 print(f"  {'detrending':<12} {'a (infl)':>9} {'b (out)':>9} {'speed':>7} "
       f"{'b/a':>7} {'R2':>7} {'interior':>9}")

@@ -45,8 +45,9 @@ def make_population(
     """A population with controlled properties, for checking measurements."""
 
     def spread(value) -> np.ndarray:
-        return np.full(n, value, dtype=float) if np.isscalar(value) else np.asarray(value, dtype=float)
-
+        if np.isscalar(value):
+            return np.full(n, value, dtype=float)
+        return np.asarray(value, dtype=float)
     return Population(
         age=np.full(n, 40, dtype=np.int16),
         income=spread(income),

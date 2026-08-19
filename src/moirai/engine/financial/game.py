@@ -36,7 +36,7 @@ when a solution lies far outside the historical range.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from enum import StrEnum
 from itertools import product
 from typing import Any

@@ -47,6 +47,7 @@ from moirai.engine.economy.shock_path import (
     build_shock_path,
     yoy_percentage_point_mappings,
 )
+
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 configure_logging("ERROR")
 
@@ -235,12 +236,12 @@ print("  See ADR 007. The credibly identified chain is run_pipeline.py.")
 # ---------------------------------------------------------- provenance
 rule("PROVENANCE AND LIMITATIONS")
 
-print(f"  data           : RBI Select Economic Indicators, downloaded manually")
+print("  data           : RBI Select Economic Indicators, downloaded manually")
 print(f"  sample         : {periods[0]} to {periods[-1]}")
 print(f"  identification : {model.scheme.value}")
 print(f"  diagnostics    : usable = {report.is_usable}  "
       f"({len(report.critical_failures)} critical)")
-print(f"  gate           : overridden, recorded in the ledger")
+print("  gate           : overridden, recorded in the ledger")
 print(f"  calibration    : loss {calibration.loss():.3f}, "
       f"{sum(1 for r in calibration.results if r.moment.confidence.value == 'unsourced')}"
       f" of {len(calibration.results)} targets unsourced")

@@ -57,7 +57,9 @@ base_total = sum(o.consumption.sum() for o in baseline)
 shock_total = sum(o.consumption.sum() for o in shocked)
 print("AGGREGATE")
 print(f"  consumption change: {(shock_total / base_total - 1) * 100:+.3f}%")
-print(f"  extra job losses  : {sum(int(o.became_unemployed.sum()) for o in shocked) - sum(int(o.became_unemployed.sum()) for o in baseline):,}")
+shocked_losses = sum(int(o.became_unemployed.sum()) for o in shocked)
+baseline_losses = sum(int(o.became_unemployed.sum()) for o in baseline)
+print(f"  extra job losses  : {shocked_losses - baseline_losses:,}")
 print()
 
 # ---- distributional effect -----------------------------------------------

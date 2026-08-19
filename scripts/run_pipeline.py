@@ -100,7 +100,7 @@ print(f"    {model.assumptions}")
 print(f"    reconstruction error: {model.reconstruction_error():.2e}")
 
 sensitivity = ordering_sensitivity(var, "indpro", "fedfunds")
-print(f"\n  ordering sensitivity of the output response to a policy shock")
+print("\n  ordering sensitivity of the output response to a policy shock")
 print(f"    across all {sensitivity.n_orderings} orderings: "
       f"[{sensitivity.minimum:+.5f}, {sensitivity.maximum:+.5f}]")
 print(f"    sign flips: {sensitivity.sign_flips}")
@@ -139,7 +139,7 @@ path = build_shock_path(
 )
 
 print(f"  shock scaled to {SHOCK_SCALE} standard deviations")
-print(f"  gate passed: the VAR is specification-usable\n")
+print("  gate passed: the VAR is specification-usable\n")
 print(f"  {'period':>7}  {'policy rate':>12}  {'inflation':>11}  {'income growth':>14}")
 for period in (0, 6, 12, 24, 36):
     state = path.at(period)
@@ -210,7 +210,7 @@ print("  the finding.")
 # ---------------------------------------------------------- provenance
 rule("PROVENANCE")
 
-print(f"  data vintage      : fetched live, content-hashed, archived")
+print("  data vintage      : fetched live, content-hashed, archived")
 print(f"  sample            : {START} to {END}, chosen on specification grounds")
 print(f"  identification    : {model.scheme.value}, ordering {' -> '.join(names)}")
 print(f"  diagnostics       : {report.is_usable} ({len(report.advisory_failures)} advisory)")

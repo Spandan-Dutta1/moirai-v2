@@ -1,6 +1,5 @@
 """Round-trip a synthetic file through the manual adapter."""
 
-from pathlib import Path
 
 from moirai.core.logging import configure_logging
 from moirai.core.paths import get_paths

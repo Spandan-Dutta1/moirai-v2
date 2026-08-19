@@ -36,7 +36,6 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from moirai.core.exceptions import EngineError
 from moirai.core.logging import get_logger
 from moirai.engine.economy.households import EmploymentStatus, Population
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath

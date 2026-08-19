@@ -5,7 +5,6 @@ from moirai.engine.financial.central_banks import (
     FED,
     MAJOR_CENTRAL_BANKS,
     RBI,
-    SpilloverParameters,
     analyse_pair,
     build_policy_game,
 )
