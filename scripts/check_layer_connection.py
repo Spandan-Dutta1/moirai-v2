@@ -11,8 +11,7 @@ from moirai.engine.causal.var import estimate_var
 from moirai.engine.data_fabric.ingestion.fred import FredAdapter
 from moirai.engine.economy.behaviour import BehaviourParameters, counterfactual
 from moirai.engine.economy.households import PopulationParameters, generate_population
-from moirai.engine.economy.policy_shock import path_from_game
-from moirai.engine.economy.shock_path import monetary_mappings
+from moirai.engine.economy.policy_shock import mappings_for_bank, path_from_game
 from moirai.engine.financial.central_banks import FED, RBI, analytic_nash
 
 configure_logging("ERROR")
@@ -60,12 +59,11 @@ path, shock = path_from_game(
     irf,
     "fedfunds_shock",
     "fedfunds",
-    monetary_mappings(
+    mappings_for_bank(
+        shocked_fed,
         "fedfunds",
         "cpiaucsl",
         "indpro",
-        baseline_rate=FED.current_rate,
-        baseline_inflation=shocked_fed.current_inflation,
         baseline_income_growth=0.02,
     ))
 

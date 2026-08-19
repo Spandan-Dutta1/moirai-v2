@@ -185,6 +185,7 @@ def shock_from_equilibrium(
     return shock
 
 
+
 def path_from_game(
     solution: AnalyticSolution,
     bank: CentralBank,
@@ -229,3 +230,51 @@ def path_from_game(
         require_usable=require_usable,
     )
     return path, shock
+
+def mappings_for_bank(
+    bank: CentralBank,
+    rate_variable: str,
+    price_variable: str,
+    output_variable: str,
+    *,
+    baseline_income_growth: float,
+    periods_per_year: float = 12.0,
+) -> tuple[VariableMapping, ...]:
+    """Build mappings anchored to the bank's own current state.
+
+    Accepting a bank and a separately-constructed set of mappings lets the
+    two disagree about where the economy starts. That happened: the game
+    solved from a 4.25 percent policy rate while the mappings defaulted to
+    6.5, so the resulting path was 225 basis points adrift from the rate
+    the game had chosen. Deriving the baselines here makes the
+    disagreement unrepresentable.
+    """
+    from moirai.engine.causal.preparation import Transformation
+    from moirai.engine.economy.shock_path import MacroVariable
+
+    return (
+        VariableMapping(
+            var_variable=rate_variable,
+            macro_variable=MacroVariable.POLICY_RATE,
+            transformation=Transformation.DIFFERENCE,
+            scale=0.01,
+            cumulate=True,
+            baseline=bank.current_rate,
+        ),
+        VariableMapping(
+            var_variable=price_variable,
+            macro_variable=MacroVariable.INFLATION,
+            transformation=Transformation.LOG_DIFFERENCE,
+            scale=periods_per_year,
+            cumulate=False,
+            baseline=bank.current_inflation,
+        ),
+        VariableMapping(
+            var_variable=output_variable,
+            macro_variable=MacroVariable.INCOME_GROWTH,
+            transformation=Transformation.LOG_DIFFERENCE,
+            scale=periods_per_year,
+            cumulate=False,
+            baseline=baseline_income_growth,
+        ),
+    )
