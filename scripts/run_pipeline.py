@@ -3,12 +3,17 @@ The complete Moirai pipeline, end to end.
 
     real data -> bitemporal storage -> stationarity -> VAR
               -> identification -> impulse responses
-              -> macro shock path -> heterogeneous households
-              -> who gains and who loses
+              -> macro shock path -> commercial banks
+              -> heterogeneous households -> who gains and who loses
 
 Every stage records what it assumed. The specification gate refuses to
 build a shock path from a VAR that failed critical diagnostics, so a
 misspecified model cannot quietly become a distributional claim.
+
+A household never faces the policy rate. It faces what its bank charges,
+so the banking layer sits between the macro path and the household
+response, and the pass-through it applies is derived from bank
+characteristics calibrated against the RBI's published figures.
 
 Run:  python scripts/run_pipeline.py
 """
@@ -26,7 +31,12 @@ from moirai.engine.data_fabric.warehouse.duckdb_store import Warehouse
 from moirai.engine.economy.behaviour import BehaviourParameters, counterfactual
 from moirai.engine.economy.calibration import evaluate
 from moirai.engine.economy.households import PopulationParameters, generate_population
-from moirai.engine.economy.shock_path import build_shock_path, monetary_mappings
+from moirai.engine.economy.shock_path import (
+    MacroVariable,
+    build_shock_path,
+    monetary_mappings,
+)
+from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
 
 configure_logging("ERROR")
 
@@ -126,6 +136,8 @@ print("\n  share of forecast error variance explained by the policy shock at h=3
 for i, name in enumerate(names):
     print(f"    {name:<12} {fevd.shares[HORIZON, i, 2]:.1%}")
 print("    a clearly signed effect can still be a small one")
+
+
 # ------------------------------------------------------------ the seam
 rule("SEAM  Impulse response to household-facing macro path")
 
@@ -142,9 +154,41 @@ print(f"  shock scaled to {SHOCK_SCALE} standard deviations")
 print("  gate passed: the VAR is specification-usable\n")
 print(f"  {'period':>7}  {'policy rate':>12}  {'inflation':>11}  {'income growth':>14}")
 for period in (0, 6, 12, 24, 36):
-    state = path.at(period)
-    values = list(state.values())
+    values = list(path.at(period).values())
     print(f"  {period:>7}  {values[0]:>11.3%}  {values[1]:>10.3%}  {values[2]:>13.3%}")
+
+
+# ---------------------------------------------------------------- Layer 2
+rule("LAYER 2  Commercial banks")
+
+banks = INDIAN_BANKING_SYSTEM
+print(f"  {len(banks.banks)} banks across three RBI groups\n")
+for group in sorted({b.group for b in banks.banks}, key=lambda g: g.value):
+    members = banks.by_group(group)
+    print(
+        f"    {group.value:<9} {len(members):>2} banks, "
+        f"{banks.group_share(group):>6.1%} of credit, "
+        f"pass-through "
+        f"{banks.weighted_lending_pass_through(tightening=True, group=group):.0%}"
+    )
+
+baseline_policy = path.baselines[MacroVariable.POLICY_RATE]
+peak_period, _ = path.peak(MacroVariable.POLICY_RATE)
+peak_policy = path.get(MacroVariable.POLICY_RATE)[peak_period]
+
+before = banks.effective_rates(baseline_policy, baseline_policy)
+after = banks.effective_rates(peak_policy, baseline_policy)
+policy_move = (peak_policy - baseline_policy) * 10_000
+
+print(f"\n  at the peak of the shock, a {policy_move:.0f}bp policy move reaches:")
+print(f"    borrowers as {(after['lending_rate'] - before['lending_rate']) * 10_000:>5.0f}bp")
+print(f"    savers as    {(after['deposit_rate'] - before['deposit_rate']) * 10_000:>5.0f}bp")
+print("    the wedge accrues to the banking system as margin")
+print()
+print("  Pass-through is derived from each bank's external benchmark share,")
+print("  retail deposit dependence and stress, and calibrated against the")
+print("  RBI's published transmission figures by bank group.")
+
 
 # ---------------------------------------------------------------- Layer 3
 rule("LAYER 3  Heterogeneous Households")
@@ -159,7 +203,7 @@ print(calibration.table())
 print(f"\n  {calibration.summary()}")
 print("  parameters fitted to declared targets, not chosen")
 
-baseline, shocked = counterfactual(population, path, BehaviourParameters())
+baseline, shocked = counterfactual(population, path, BehaviourParameters(), banks)
 
 base_total = np.sum([o.consumption for o in baseline], axis=0)
 shock_total = np.sum([o.consumption for o in shocked], axis=0)
@@ -169,6 +213,7 @@ aggregate = (shock_total.sum() / base_total.sum() - 1) * 100
 extra_losses = sum(int(o.became_unemployed.sum()) for o in shocked) - sum(
     int(o.became_unemployed.sum()) for o in baseline
 )
+
 
 # ---------------------------------------------------------------- result
 rule("RESULT  Who bears a monetary tightening?")
@@ -207,6 +252,7 @@ print("  and concludes that monetary policy barely moves consumption. The")
 print("  aggregate is small because it is a transfer, and the transfer is")
 print("  the finding.")
 
+
 # ---------------------------------------------------------- provenance
 rule("PROVENANCE")
 
@@ -215,6 +261,8 @@ print(f"  sample            : {START} to {END}, chosen on specification grounds"
 print(f"  identification    : {model.scheme.value}, ordering {' -> '.join(names)}")
 print(f"  diagnostics       : {report.is_usable} ({len(report.advisory_failures)} advisory)")
 print(f"  shock scale       : {SHOCK_SCALE} standard deviations")
+print(f"  banking system    : {len(banks.banks)} banks, "
+      f"pass-through calibrated to RBI bulletin figures")
 print(f"  population seed   : {population.parameters.seed}")
 print(f"  calibration loss  : {calibration.loss():.3f}")
 print(f"  unsourced targets : "
