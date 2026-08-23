@@ -550,3 +550,163 @@ INDIAN_BANKING_SYSTEM = BankingSystem(
         _bank("HSBC India", BankGroup.FOREIGN, 280_000, eblr=0.86, retail=0.30, npa=0.014, capital_ratio=0.190),
     )
 )
+
+# ---- out-of-sample validation ---------------------------------------------
+
+RBI_TIGHTENING = (
+    "RBI data, tightening cycle May 2022 to November 2024, weighted average "
+    "lending rate on fresh rupee loans and weighted average domestic term "
+    "deposit rate on fresh deposits, against a cumulative 250bp repo hike"
+)
+
+
+class ValidationCheck(BaseModel):
+    """One prediction the model makes that the data can refute.
+
+    Distinct from a calibration target. A target is something the model was
+    tuned to reproduce, so agreement is construction rather than evidence.
+    A check is a figure the model never saw, on a cycle it was not fitted
+    to, and it can fail.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    predicted_by_model: str = Field(description="What the model implies.")
+    observed: str = Field(description="What the data shows.")
+    passed: bool
+    detail: str = ""
+    source: str
+
+
+#: The tightening cycle, held out. The banking layer's pass-through
+#: functions were tuned against the easing figures, so these were never
+#: used in calibration and the model has a real chance to fail them.
+#:
+#: Two complications worth stating. The published measures disagree with
+#: each other: fresh against outstanding, median against weighted average,
+#: and the window matters enormously because deposits repriced late once
+#: surplus liquidity drained. And the easing figures used for calibration
+#: come from a later cycle than the tightening figures used here, so the
+#: composition of the banking system differs between them.
+TIGHTENING_OBSERVED = {
+    "repo_change": 0.0250,
+    "public_lending_bp": 182.0,
+    "private_lending_bp": 178.0,
+    "system_lending_bp": 189.0,
+    "system_deposit_bp": 243.0,
+}
+
+
+def validate_out_of_sample(
+    system: BankingSystem, observed: dict[str, float] = TIGHTENING_OBSERVED
+) -> dict[str, Any]:
+    """Test the model's tightening predictions against held-out data.
+
+    Three predictions are checked:
+
+      1. Lending pass-through is higher when tightening than when easing.
+         This is the asymmetry the model exists to produce.
+      2. The public-private ordering in tightening.
+      3. Deposit pass-through in tightening.
+
+    The model was calibrated on the easing cycle only, so all three are
+    out of sample.
+    """
+    repo = observed["repo_change"]
+    checks: list[ValidationCheck] = []
+
+    # ---- 1. the asymmetry -------------------------------------------------
+    tightening = system.weighted_lending_pass_through(tightening=True)
+    easing = system.weighted_lending_pass_through(tightening=False)
+    observed_tightening = observed["system_lending_bp"] / (repo * 10_000)
+
+    checks.append(
+        ValidationCheck(
+            name="lending asymmetry",
+            predicted_by_model=f"tightening {tightening:.0%} > easing {easing:.0%}",
+            observed=f"tightening {observed_tightening:.0%}",
+            passed=tightening > easing,
+            detail=(
+                "The model's central mechanical claim: banks raise rates "
+                "faster than they cut them. Directionally checkable even "
+                "though the two cycles are not the same sample."
+            ),
+            source=RBI_TIGHTENING,
+        )
+    )
+
+    # ---- 2. the group ordering under tightening ---------------------------
+    model_public = system.weighted_lending_pass_through(
+        tightening=True, group=BankGroup.PUBLIC
+    )
+    model_private = system.weighted_lending_pass_through(
+        tightening=True, group=BankGroup.PRIVATE
+    )
+    observed_public = observed["public_lending_bp"] / (repo * 10_000)
+    observed_private = observed["private_lending_bp"] / (repo * 10_000)
+
+    model_says_private_higher = model_private > model_public
+    data_says_private_higher = observed_private > observed_public
+
+    checks.append(
+        ValidationCheck(
+            name="public-private ordering in tightening",
+            predicted_by_model=(
+                f"public {model_public:.0%}, private {model_private:.0%}"
+            ),
+            observed=f"public {observed_public:.0%}, private {observed_private:.0%}",
+            passed=model_says_private_higher == data_says_private_higher,
+            detail=(
+                "The model gives private banks a higher external benchmark "
+                "share and lower stress, so it predicts they transmit more "
+                "in both directions. The data shows the ordering reverses "
+                "under tightening: public banks transmitted marginally more. "
+                "The model has no mechanism for that."
+            ),
+            source=RBI_TIGHTENING,
+        )
+    )
+
+    # ---- 3. deposit pass-through under tightening -------------------------
+    model_deposit = system.weighted_deposit_pass_through(tightening=True)
+    observed_deposit = observed["system_deposit_bp"] / (repo * 10_000)
+
+    checks.append(
+        ValidationCheck(
+            name="deposit pass-through in tightening",
+            predicted_by_model=f"{model_deposit:.0%}",
+            observed=f"{observed_deposit:.0%}",
+            passed=abs(model_deposit - observed_deposit) < 0.25,
+            detail=(
+                "Badly wrong. The model assumes banks are slow to raise "
+                "deposit rates, which held early in the cycle when median "
+                "term deposit rates rose only 48bp against a 190bp EBLR "
+                "move. Over the full cycle the weighted average deposit "
+                "rate on fresh deposits rose 243bp against a 250bp hike, "
+                "because deposits repriced sharply once surplus liquidity "
+                "drained. The model has no liquidity state, so it cannot "
+                "produce the late catch-up."
+            ),
+            source=RBI_TIGHTENING,
+        )
+    )
+
+    passed = sum(1 for c in checks if c.passed)
+    log.info(
+        "out_of_sample_validation",
+        n_checks=len(checks),
+        n_passed=passed,
+        failed=[c.name for c in checks if not c.passed],
+    )
+
+    return {
+        "n_checks": len(checks),
+        "n_passed": passed,
+        "checks": [c.model_dump() for c in checks],
+        "source": RBI_TIGHTENING,
+        "note": (
+            "Held out from calibration. The pass-through functions were "
+            "tuned against the easing cycle only."
+        ),
+    }
