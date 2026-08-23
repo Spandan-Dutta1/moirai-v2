@@ -11,15 +11,22 @@ opposite directions for different people:
 
 A representative household nets these to roughly zero and concludes that
 monetary policy barely matters. That conclusion is an artefact of
-averaging. The twenty seven percent of households holding floating-rate
-debt are hit hard; wealthy savers gain. The aggregate hides a transfer,
-and the transfer is the finding.
+averaging. The households holding floating-rate debt are hit hard; wealthy
+savers gain. The aggregate hides a transfer, and the transfer is the
+finding.
+
+A household never faces the policy rate. It faces what its bank charges,
+and the two differ by a spread that moves asymmetrically: of a hundred
+basis point repo rise, Indian borrowers absorb roughly eighty while savers
+receive around thirty, and the wedge accrues to the banking system. Those
+rates come from the banking layer rather than from a constant, so the
+wedge is produced by bank characteristics rather than assumed.
 
 Consumption uses a marginal propensity to consume rather than a solved
 dynamic programme. Two reasons: it is tractable across ten million
 households, and MPCs are directly estimable from survey and administrative
-data, which means Layer 5 can validate against something real rather than
-against another model.
+data, which means the calibration layer can validate against something
+real rather than against another model.
 
 The limitation is stated plainly. These are behavioural rules with
 parameters, not choices derived from optimisation, so they cannot claim
@@ -39,8 +46,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from moirai.core.logging import get_logger
 from moirai.engine.economy.households import EmploymentStatus, Population
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath
+from moirai.engine.financial.commercial_banks import BankingSystem
 
 log = get_logger(__name__)
+
+#: Spreads used when no banking system is supplied. Deliberately crude:
+#: the point of Layer 2 is that these should not be constants, and a
+#: caller running without banks should get a visibly simpler answer.
+FALLBACK_LENDING_SPREAD = 0.030
+FALLBACK_DEPOSIT_SPREAD = 0.015
 
 
 class BehaviourParameters(BaseModel):
@@ -74,18 +88,6 @@ class BehaviourParameters(BaseModel):
         default=15.0,
         gt=0.0,
         description="Average remaining term, used to amortise the payment.",
-    )
-    floating_pass_through: float = Field(
-        default=0.85,
-        ge=0.0,
-        le=1.0,
-        description="Share of a policy rate change reaching floating loan rates.",
-    )
-    deposit_pass_through: float = Field(
-        default=0.45,
-        ge=0.0,
-        le=1.0,
-        description="Deposit rates track policy less than one for one.",
     )
 
     # ---- employment ----
@@ -143,6 +145,8 @@ class PeriodOutcome(BaseModel):
     debt_service: Any = Field(description="(n,) annual debt payments.")
     interest_income: Any = Field(description="(n,) income from liquid wealth.")
     became_unemployed: Any = Field(description="(n,) boolean, lost work this period.")
+    lending_rate: float = Field(default=0.0, description="Rate banks charged.")
+    deposit_rate: float = Field(default=0.0, description="Rate banks paid.")
 
     def aggregate(self) -> dict[str, float]:
         return {
@@ -151,6 +155,8 @@ class PeriodOutcome(BaseModel):
             "total_debt_service": float(self.debt_service.sum()),
             "total_interest_income": float(self.interest_income.sum()),
             "job_losses": int(self.became_unemployed.sum()),
+            "lending_rate": self.lending_rate,
+            "deposit_rate": self.deposit_rate,
         }
 
 
@@ -173,37 +179,70 @@ def marginal_propensity_to_consume(
     monthly_income = np.maximum(population.income / 12.0, 1.0)
     buffer_months = np.maximum(population.wealth, 0.0) / monthly_income
 
-    # Exponential decay from the low-wealth MPC toward the high-wealth one.
     decay = np.exp(-buffer_months / parameters.mpc_wealth_scale)
     return parameters.mpc_high_wealth + (
         parameters.mpc_low_wealth - parameters.mpc_high_wealth
     ) * decay
 
 
-def debt_service(
-    population: Population,
-    policy_rate: float,
-    parameters: BehaviourParameters,
-    *,
-    baseline_rate: float,
-) -> np.ndarray:
-    """Annual debt payments at the current policy rate.
+def bank_rates(
+    policy_rate: float, baseline_policy_rate: float, banks: BankingSystem | None
+) -> tuple[float, float, float]:
+    """Resolve what a household actually pays and receives.
 
-    Floating-rate borrowers see the change, scaled by pass-through, which
-    is below one because lenders adjust with a lag and absorb some of the
-    move in margins. Fixed-rate borrowers keep paying the baseline rate,
-    which is the insulation that makes the fixed-floating mix matter.
+    Returns the current lending rate, the baseline lending rate that
+    fixed-rate borrowers are still paying, and the deposit rate.
 
-    The payment is a standard amortising annuity, so a rate rise increases
-    the payment on the whole outstanding balance, not just on new borrowing.
+    Resolved once per period rather than inside each channel, so the
+    banking layer stays out of every downstream function while still
+    determining what people face. Without a banking system the spreads are
+    flat constants, which is the pre-Layer-2 behaviour and is visibly
+    cruder.
     """
-    effective = np.where(
-        population.debt_is_floating,
-        baseline_rate + (policy_rate - baseline_rate) * parameters.floating_pass_through,
-        baseline_rate,
+    if banks is None:
+        return (
+            policy_rate + FALLBACK_LENDING_SPREAD,
+            baseline_policy_rate + FALLBACK_LENDING_SPREAD,
+            max(policy_rate - FALLBACK_DEPOSIT_SPREAD, 0.0),
+        )
+
+    current = banks.effective_rates(policy_rate, baseline_policy_rate)
+    at_baseline = banks.effective_rates(baseline_policy_rate, baseline_policy_rate)
+    return (
+        current["lending_rate"],
+        at_baseline["lending_rate"],
+        current["deposit_rate"],
     )
 
-    # Annuity payment: r * P / (1 - (1 + r)^-n), guarding the zero-rate case.
+
+def debt_service(
+    population: Population,
+    lending_rate: float,
+    parameters: BehaviourParameters,
+    *,
+    baseline_lending_rate: float,
+) -> np.ndarray:
+    """Annual debt payments at the rate banks are actually charging.
+
+    Takes a lending rate rather than a policy rate. That distinction is
+    the point of the banking layer: a hundred basis point repo rise
+    reaches Indian borrowers as roughly eighty, and the wedge is bank
+    margin rather than something the household sees.
+
+    Floating-rate borrowers see the change; fixed-rate borrowers keep
+    paying the baseline rate until they refinance. That insulation is why
+    the fixed-floating mix determines how hard a tightening bites, and why
+    India, where mortgages are predominantly floating, transmits faster
+    than the United States.
+
+    The payment is a standard amortising annuity, so a rate rise increases
+    the payment on the whole outstanding balance rather than only on new
+    borrowing.
+    """
+    effective = np.where(
+        population.debt_is_floating, lending_rate, baseline_lending_rate
+    )
+
     n_years = parameters.debt_maturity_years
     with np.errstate(divide="ignore", invalid="ignore"):
         factor = np.where(
@@ -214,22 +253,13 @@ def debt_service(
     return population.debt * factor
 
 
-def interest_income(
-    population: Population,
-    policy_rate: float,
-    parameters: BehaviourParameters,
-    *,
-    baseline_rate: float,
-) -> np.ndarray:
-    """Income earned on liquid wealth.
+def interest_income(population: Population, deposit_rate: float) -> np.ndarray:
+    """Income earned on liquid wealth at the rate banks are paying.
 
-    Deposit rates track policy at well under one for one, which is the
-    other half of why a rate rise is a transfer: borrowers pay most of the
-    increase while savers receive only part of it.
+    Deposit rates move less than lending rates, and that asymmetry is now
+    produced by the banking layer rather than assumed here. Borrowers pay
+    most of a policy increase while savers receive part of it.
     """
-    deposit_rate = baseline_rate + (
-        policy_rate - baseline_rate
-    ) * parameters.deposit_pass_through
     return np.maximum(population.wealth, 0.0) * deposit_rate
 
 
@@ -257,8 +287,6 @@ def job_loss_probability(
     if average_hazard <= 0.0:
         return np.zeros(len(population))
 
-    # Income rank in [0, 1], then a linear gradient normalised to preserve
-    # the average hazard implied by Okun's law.
     # Rank within the labour force only. Ranking over everyone would place
     # retirees, whose income is reduced by construction, at the bottom of
     # the distribution, so the gradient would be measured against a
@@ -305,6 +333,7 @@ def step(
     path: ShockPath,
     parameters: BehaviourParameters,
     rng: np.random.Generator,
+    banks: BankingSystem | None = None,
 ) -> tuple[Population, PeriodOutcome]:
     """Advance the population one period along the shock path.
 
@@ -342,13 +371,13 @@ def step(
     updated.income[lost_job] *= parameters.unemployment_income_replacement
     updated.income[found_job] /= max(parameters.unemployment_income_replacement, 1e-6)
 
-    # ---- interest flows ----
+    # ---- interest flows, priced by the banking layer ----
+    lending, baseline_lending, deposit = bank_rates(policy_rate, baseline_rate, banks)
+
     payments = debt_service(
-        updated, policy_rate, parameters, baseline_rate=baseline_rate
+        updated, lending, parameters, baseline_lending_rate=baseline_lending
     )
-    receipts = interest_income(
-        updated, policy_rate, parameters, baseline_rate=baseline_rate
-    )
+    receipts = interest_income(updated, deposit)
     disposable = np.maximum(updated.income + receipts - payments, 0.0)
 
     # ---- consumption ----
@@ -373,6 +402,8 @@ def step(
         debt_service=payments,
         interest_income=receipts,
         became_unemployed=lost_job,
+        lending_rate=lending,
+        deposit_rate=deposit,
     )
     return updated, outcome
 
@@ -381,14 +412,15 @@ def simulate(
     population: Population,
     path: ShockPath,
     parameters: BehaviourParameters | None = None,
+    banks: BankingSystem | None = None,
 ) -> tuple[Population, list[PeriodOutcome]]:
     """Run the population along the whole shock path.
 
     The random draw is seeded from the parameters, so a simulation is a
-    deterministic function of its population, its shock path and its
-    calibration. Two runs with the same three inputs produce identical
-    output, which is what makes a result reproducible rather than
-    illustrative.
+    deterministic function of its population, its shock path, its
+    calibration and its banking system. Two runs with the same four inputs
+    produce identical output, which is what makes a result reproducible
+    rather than illustrative.
     """
     parameters = parameters or BehaviourParameters()
     rng = np.random.default_rng(parameters.seed)
@@ -397,7 +429,7 @@ def simulate(
     outcomes: list[PeriodOutcome] = []
 
     for period in range(len(path)):
-        current, outcome = step(current, period, path, parameters, rng)
+        current, outcome = step(current, period, path, parameters, rng, banks)
         outcomes.append(outcome)
 
     log.info(
@@ -406,6 +438,7 @@ def simulate(
         periods=len(path),
         shock=path.shock_name,
         total_job_losses=sum(int(o.became_unemployed.sum()) for o in outcomes),
+        banks=None if banks is None else len(banks.banks),
         seed=parameters.seed,
     )
     return current, outcomes
@@ -415,6 +448,7 @@ def counterfactual(
     population: Population,
     shocked: ShockPath,
     parameters: BehaviourParameters | None = None,
+    banks: BankingSystem | None = None,
 ) -> tuple[list[PeriodOutcome], list[PeriodOutcome]]:
     """Run the same population with and without the shock.
 
@@ -434,6 +468,6 @@ def counterfactual(
         update={"paths": flat, "shock_name": f"{shocked.shock_name}_baseline"}
     )
 
-    _, baseline_outcomes = simulate(population, baseline_path, parameters)
-    _, shocked_outcomes = simulate(population, shocked, parameters)
+    _, baseline_outcomes = simulate(population, baseline_path, parameters, banks)
+    _, shocked_outcomes = simulate(population, shocked, parameters, banks)
     return baseline_outcomes, shocked_outcomes

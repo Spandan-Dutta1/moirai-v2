@@ -16,6 +16,7 @@ import pytest
 
 from moirai.engine.economy.behaviour import (
     BehaviourParameters,
+    bank_rates,
     counterfactual,
     debt_service,
     interest_income,
@@ -32,10 +33,16 @@ from moirai.engine.economy.households import (
     generate_population,
 )
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath
+from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
 
 BASELINE_RATE = 0.065
 BASELINE_INFLATION = 0.05
 BASELINE_GROWTH = 0.06
+
+#: Household-facing lending rate at the baseline policy rate, using the
+#: flat fallback spread. Tests of the debt channel work in lending rates
+#: now, because that is what a household actually faces.
+BASELINE_LENDING = BASELINE_RATE + 0.03
 
 
 def make_path(
@@ -134,97 +141,124 @@ def test_negative_wealth_does_not_break_the_mpc(parameters):
 
 def test_floating_borrower_pays_more_when_rates_rise(parameters):
     people = two_households(debt=(500_000.0, 500_000.0), floating=(True, True))
-    low = debt_service(people, BASELINE_RATE, parameters, baseline_rate=BASELINE_RATE)
-    high = debt_service(people, BASELINE_RATE + 0.02, parameters, baseline_rate=BASELINE_RATE)
+    low = debt_service(
+        people, BASELINE_LENDING, parameters, baseline_lending_rate=BASELINE_LENDING
+    )
+    high = debt_service(
+        people,
+        BASELINE_LENDING + 0.02,
+        parameters,
+        baseline_lending_rate=BASELINE_LENDING,
+    )
     assert high[0] > low[0]
 
 
 def test_fixed_borrower_is_insulated(parameters):
     """The transmission channel: fixed-rate debt does not reprice."""
     people = two_households(debt=(500_000.0, 500_000.0), floating=(False, False))
-    low = debt_service(people, BASELINE_RATE, parameters, baseline_rate=BASELINE_RATE)
-    high = debt_service(people, BASELINE_RATE + 0.02, parameters, baseline_rate=BASELINE_RATE)
+    low = debt_service(
+        people, BASELINE_LENDING, parameters, baseline_lending_rate=BASELINE_LENDING
+    )
+    high = debt_service(
+        people,
+        BASELINE_LENDING + 0.02,
+        parameters,
+        baseline_lending_rate=BASELINE_LENDING,
+    )
     assert np.allclose(low, high)
 
 
 def test_only_the_floating_borrower_is_affected(parameters):
     people = two_households(debt=(500_000.0, 500_000.0), floating=(True, False))
-    low = debt_service(people, BASELINE_RATE, parameters, baseline_rate=BASELINE_RATE)
-    high = debt_service(people, BASELINE_RATE + 0.02, parameters, baseline_rate=BASELINE_RATE)
+    low = debt_service(
+        people, BASELINE_LENDING, parameters, baseline_lending_rate=BASELINE_LENDING
+    )
+    high = debt_service(
+        people,
+        BASELINE_LENDING + 0.02,
+        parameters,
+        baseline_lending_rate=BASELINE_LENDING,
+    )
     assert high[0] > low[0]
     assert high[1] == pytest.approx(low[1])
 
 
 def test_debt_free_households_pay_nothing(parameters):
     people = two_households(debt=(0.0, 0.0))
-    payments = debt_service(people, 0.10, parameters, baseline_rate=BASELINE_RATE)
+    payments = debt_service(
+        people, 0.10, parameters, baseline_lending_rate=BASELINE_LENDING
+    )
     assert np.allclose(payments, 0.0)
 
 
 def test_debt_service_scales_with_the_balance(parameters):
     people = two_households(debt=(100_000.0, 200_000.0), floating=(True, True))
-    payments = debt_service(people, BASELINE_RATE, parameters, baseline_rate=BASELINE_RATE)
-    assert payments[1] == pytest.approx(2 * payments[0])
-
-
-def test_pass_through_below_one_dampens_the_increase():
-    """Lenders absorb part of a policy move in their margins."""
-    people = two_households(debt=(500_000.0, 500_000.0), floating=(True, True))
-    full = BehaviourParameters(floating_pass_through=1.0)
-    partial = BehaviourParameters(floating_pass_through=0.5)
-
-    rise = BASELINE_RATE + 0.02
-    assert debt_service(people, rise, partial, baseline_rate=BASELINE_RATE)[0] < debt_service(
-        people, rise, full, baseline_rate=BASELINE_RATE
-    )[0]
-
-
-def test_zero_pass_through_makes_floating_behave_as_fixed():
-    people = two_households(debt=(500_000.0, 500_000.0), floating=(True, False))
-    parameters = BehaviourParameters(floating_pass_through=0.0)
     payments = debt_service(
-        people, BASELINE_RATE + 0.03, parameters, baseline_rate=BASELINE_RATE
+        people, BASELINE_LENDING, parameters, baseline_lending_rate=BASELINE_LENDING
     )
-    assert payments[0] == pytest.approx(payments[1])
+    assert payments[1] == pytest.approx(2 * payments[0])
 
 
 def test_zero_rate_does_not_divide_by_zero(parameters):
     """The annuity formula is singular at zero and must be handled."""
     people = two_households(debt=(500_000.0, 500_000.0), floating=(True, True))
-    payments = debt_service(people, 0.0, parameters, baseline_rate=0.0)
+    payments = debt_service(people, 0.0, parameters, baseline_lending_rate=0.0)
     assert np.all(np.isfinite(payments))
     assert np.all(payments > 0)
 
 
+# --- the banking layer sets the rates --------------------------------------
+
+def test_without_banks_a_flat_spread_is_used():
+    """The pre-Layer-2 behaviour, kept so the household layer can run
+    standalone. Visibly cruder, which is the point of having Layer 2."""
+    lending, baseline_lending, deposit = bank_rates(0.06, 0.05, None)
+    assert lending == pytest.approx(0.09)
+    assert baseline_lending == pytest.approx(0.08)
+    assert deposit == pytest.approx(0.045)
+
+
+def test_banks_pass_through_less_than_one_for_one():
+    """Lenders absorb part of a policy move in their margins. This used to
+    be a household parameter; it now emerges from bank characteristics."""
+    before, _, _ = bank_rates(0.05, 0.05, INDIAN_BANKING_SYSTEM)
+    after, _, _ = bank_rates(0.06, 0.05, INDIAN_BANKING_SYSTEM)
+    passed = after - before
+    assert 0.0 < passed < 0.01
+
+
+def test_banks_produce_a_wedge_between_lending_and_deposits():
+    """The transfer: borrowers absorb more of a rise than savers receive,
+    and the difference accrues to the banking system as margin."""
+    lending_before, _, deposit_before = bank_rates(0.05, 0.05, INDIAN_BANKING_SYSTEM)
+    lending_after, _, deposit_after = bank_rates(0.06, 0.05, INDIAN_BANKING_SYSTEM)
+    assert (lending_after - lending_before) > (deposit_after - deposit_before)
+
+
+def test_the_baseline_lending_rate_is_unchanged_by_a_move():
+    """Fixed-rate borrowers keep paying the old rate, so the baseline must
+    not move with the policy rate."""
+    _, baseline_at_five, _ = bank_rates(0.05, 0.05, INDIAN_BANKING_SYSTEM)
+    _, baseline_at_six, _ = bank_rates(0.06, 0.05, INDIAN_BANKING_SYSTEM)
+    assert baseline_at_five == pytest.approx(baseline_at_six)
+
+
 # --- interest income -------------------------------------------------------
 
-def test_savers_earn_more_when_rates_rise(parameters):
+def test_savers_earn_more_when_rates_rise():
     people = two_households(wealth=(1_000_000.0, 1_000_000.0))
-    low = interest_income(people, BASELINE_RATE, parameters, baseline_rate=BASELINE_RATE)
-    high = interest_income(
-        people, BASELINE_RATE + 0.02, parameters, baseline_rate=BASELINE_RATE
-    )
-    assert high[0] > low[0]
+    assert interest_income(people, 0.05)[0] > interest_income(people, 0.03)[0]
 
 
-def test_no_wealth_means_no_interest_income(parameters):
+def test_no_wealth_means_no_interest_income():
     people = two_households(wealth=(0.0, 0.0))
-    assert np.allclose(
-        interest_income(people, 0.10, parameters, baseline_rate=BASELINE_RATE), 0.0
-    )
+    assert np.allclose(interest_income(people, 0.10), 0.0)
 
 
-def test_negative_wealth_earns_nothing_rather_than_negative(parameters):
+def test_negative_wealth_earns_nothing_rather_than_negative():
     people = two_households(wealth=(-100_000.0, 0.0))
-    assert np.all(
-        interest_income(people, 0.08, parameters, baseline_rate=BASELINE_RATE) >= 0.0
-    )
+    assert np.all(interest_income(people, 0.08) >= 0.0)
 
-
-def test_deposits_track_policy_less_than_borrowing_does():
-    """The other half of the transfer: borrowers pay more than savers receive."""
-    parameters = BehaviourParameters()
-    assert parameters.deposit_pass_through < parameters.floating_pass_through
 
 # --- job loss --------------------------------------------------------------
 
@@ -282,6 +316,7 @@ def test_a_flat_gradient_removes_the_income_difference(population):
     low = hazard[active & (quintile == 0)]
     high = hazard[active & (quintile == 4)]
     assert low.mean() == pytest.approx(high.mean(), rel=0.05)
+
 
 def test_those_outside_the_labour_force_face_no_hazard(population, parameters):
     hazard = job_loss_probability(
@@ -381,12 +416,37 @@ def test_outcome_aggregates(population, parameters):
     assert aggregate["job_losses"] >= 0
 
 
+def test_the_outcome_records_the_rates_faced(population, parameters):
+    """A household's experience is the bank rate, not the policy rate, so
+    the outcome records what it actually faced."""
+    rng = np.random.default_rng(0)
+    _, outcome = step(population, 0, make_path(), parameters, rng)
+    assert outcome.lending_rate > outcome.deposit_rate
+
+
 def test_a_period_outside_the_path_is_rejected(population, parameters):
     from moirai.core.exceptions import EngineError
 
     rng = np.random.default_rng(0)
     with pytest.raises(EngineError, match="outside"):
         step(population, 999, make_path(horizon=12), parameters, rng)
+
+
+def test_banks_change_what_households_face(population, parameters):
+    """The point of Layer 2: with a banking system the household sees a
+    different rate from the flat fallback spread."""
+    rng = np.random.default_rng(0)
+    without = step(population, 0, make_path(rate_deviation=0.02), parameters, rng)[1]
+    rng = np.random.default_rng(0)
+    with_banks = step(
+        population,
+        0,
+        make_path(rate_deviation=0.02),
+        parameters,
+        rng,
+        INDIAN_BANKING_SYSTEM,
+    )[1]
+    assert without.lending_rate != with_banks.lending_rate
 
 
 # --- simulation ------------------------------------------------------------
@@ -404,6 +464,13 @@ def test_simulation_is_reproducible(population, parameters):
     assert np.array_equal(first[0].consumption, second[0].consumption)
 
 
+def test_simulation_with_banks_is_reproducible(population, parameters):
+    path = make_path(rate_deviation=0.01)
+    _, first = simulate(population, path, parameters, INDIAN_BANKING_SYSTEM)
+    _, second = simulate(population, path, parameters, INDIAN_BANKING_SYSTEM)
+    assert np.array_equal(first[0].consumption, second[0].consumption)
+
+
 def test_different_seeds_give_different_paths(population):
     """A path with no shortfall produces no job losses at all, so the
     comparison needs a period where the random draw actually matters."""
@@ -411,6 +478,7 @@ def test_different_seeds_give_different_paths(population):
     _, first = simulate(population, path, BehaviourParameters(seed=1))
     _, second = simulate(population, path, BehaviourParameters(seed=2))
     assert not np.array_equal(first[5].became_unemployed, second[5].became_unemployed)
+
 
 def test_simulation_does_not_mutate_the_input(population, parameters):
     before = population.wealth.copy()
@@ -422,11 +490,8 @@ def test_simulation_does_not_mutate_the_input(population, parameters):
 
 def test_a_rate_rise_raises_debt_service_in_aggregate(population, parameters):
     """Direction, not size: the magnitude depends on calibration."""
-    flat = make_path()
-    tight = make_path(rate_deviation=0.02)
-
-    _, base = simulate(population, flat, parameters)
-    _, shocked = simulate(population, tight, parameters)
+    _, base = simulate(population, make_path(), parameters)
+    _, shocked = simulate(population, make_path(rate_deviation=0.02), parameters)
 
     assert sum(o.debt_service.sum() for o in shocked) > sum(
         o.debt_service.sum() for o in base
@@ -434,23 +499,29 @@ def test_a_rate_rise_raises_debt_service_in_aggregate(population, parameters):
 
 
 def test_a_rate_rise_raises_interest_income_in_aggregate(population, parameters):
-    flat = make_path()
-    tight = make_path(rate_deviation=0.02)
-
-    _, base = simulate(population, flat, parameters)
-    _, shocked = simulate(population, tight, parameters)
+    _, base = simulate(population, make_path(), parameters)
+    _, shocked = simulate(population, make_path(rate_deviation=0.02), parameters)
 
     assert sum(o.interest_income.sum() for o in shocked) > sum(
         o.interest_income.sum() for o in base
     )
 
 
-def test_weaker_growth_causes_more_job_losses(population, parameters):
-    flat = make_path()
-    recession = make_path(growth_deviation=-0.04)
+def test_the_same_holds_through_the_banking_layer(population, parameters):
+    """Banks dampen the pass-through but must not reverse the direction."""
+    _, base = simulate(population, make_path(), parameters, INDIAN_BANKING_SYSTEM)
+    _, shocked = simulate(
+        population, make_path(rate_deviation=0.02), parameters, INDIAN_BANKING_SYSTEM
+    )
 
-    _, base = simulate(population, flat, parameters)
-    _, shocked = simulate(population, recession, parameters)
+    assert sum(o.debt_service.sum() for o in shocked) > sum(
+        o.debt_service.sum() for o in base
+    )
+
+
+def test_weaker_growth_causes_more_job_losses(population, parameters):
+    _, base = simulate(population, make_path(), parameters)
+    _, shocked = simulate(population, make_path(growth_deviation=-0.04), parameters)
 
     assert sum(int(o.became_unemployed.sum()) for o in shocked) > sum(
         int(o.became_unemployed.sum()) for o in base
@@ -485,9 +556,15 @@ def test_a_zero_shock_makes_the_two_runs_identical(population, parameters):
     assert np.allclose(base[0].consumption, shocked[0].consumption)
 
 
+def test_the_counterfactual_accepts_a_banking_system(population, parameters):
+    base, shocked = counterfactual(
+        population, make_path(rate_deviation=0.02), parameters, INDIAN_BANKING_SYSTEM
+    )
+    assert len(base) == len(shocked)
+
+
 def test_the_baseline_holds_every_variable_at_its_baseline(population, parameters):
     base, _ = counterfactual(population, make_path(rate_deviation=0.03), parameters)
-    # No rate deviation means debt service is identical in every period.
     first = base[0].debt_service.sum()
     last = base[-1].debt_service.sum()
     assert last == pytest.approx(first, rel=0.5)  # only inflation erosion differs
@@ -507,15 +584,21 @@ def test_parameters_serialise_for_the_ledger():
     assert payload["seed"] == 42
 
 
+def test_pass_through_is_no_longer_a_household_parameter():
+    """It moved to the banking layer, where it is derived from bank
+    characteristics rather than assumed."""
+    assert not hasattr(BehaviourParameters(), "floating_pass_through")
+    assert not hasattr(BehaviourParameters(), "deposit_pass_through")
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
         ("mpc_low_wealth", 0.0),
         ("mpc_low_wealth", 1.5),
-        ("floating_pass_through", -0.1),
-        ("floating_pass_through", 1.5),
         ("expectation_learning_rate", 1.5),
         ("debt_maturity_years", 0.0),
+        ("job_finding_rate", 0.0),
     ],
 )
 def test_invalid_parameters_are_rejected(field, value):
