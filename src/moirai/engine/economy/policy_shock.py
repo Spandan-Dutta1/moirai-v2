@@ -26,8 +26,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
+
 from moirai.core.exceptions import EngineError
 from moirai.core.logging import get_logger
 from moirai.engine.causal.diagnostics import DiagnosticReport

@@ -1,6 +1,5 @@
 """Five central banks as a network."""
 
-import numpy as np
 
 from moirai.core.logging import configure_logging
 from moirai.engine.financial.central_banks import (

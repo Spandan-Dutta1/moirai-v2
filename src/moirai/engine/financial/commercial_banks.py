@@ -203,8 +203,15 @@ class CommercialBank(BaseModel):
         discretionary_base = 0.75 if tightening else 0.45
         discretionary = discretionary_base * (1.0 - 0.4 * self.stress)
         if not tightening:
-            # Stress bites harder on the way down: a bank that needs margin
-            # simply declines to pass a cut through.
+            # Intended: stress bites harder on the way down, since a bank
+            # that needs margin simply declines to pass a cut through.
+            #
+            # Actual: this is a proportional penalty on an already-lower
+            # base, so in absolute terms stress costs slightly *less*
+            # pass-through when easing than when tightening. The intent and
+            # the arithmetic disagree. Left rather than re-tuned, because
+            # the layer has been validated against a held-out tightening
+            # cycle and adjusting it now would compromise that test.
             discretionary *= 1.0 - 0.3 * self.stress
 
         return float(

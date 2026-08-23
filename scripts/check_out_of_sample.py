@@ -10,7 +10,6 @@ from moirai.core.logging import configure_logging
 from moirai.engine.financial.commercial_banks import (
     EASING_TARGETS,
     INDIAN_BANKING_SYSTEM,
-    BankGroup,
     evaluate_transmission,
     validate_out_of_sample,
 )

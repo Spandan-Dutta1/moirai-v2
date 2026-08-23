@@ -17,7 +17,6 @@ from moirai.core.exceptions import EngineError
 from moirai.engine.financial.game import (
     Confidence,
     Game,
-    Outcome,
     Player,
     SolutionConcept,
     best_responses,
