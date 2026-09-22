@@ -43,7 +43,7 @@ report = diagnose(var, portmanteau_lags=24)
 irf = impulse_responses(identify_cholesky(var, ordering=names), horizon=36)
 
 banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
-spillovers = SpilloverMatrix.from_tiers(DEFAULT_TIERS)
+spillovers = SpilloverMatrix.from_literature(DEFAULT_TIERS)
 population = generate_population(PopulationParameters(n_households=200_000, seed=1))
 calibration = evaluate(population)
 

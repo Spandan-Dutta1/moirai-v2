@@ -30,8 +30,10 @@ from moirai.engine.financial.central_banks import (
 from moirai.engine.financial.game import Confidence
 from moirai.engine.financial.network import (
     DEFAULT_TIERS,
+    NetworkEquilibrium,
     SpilloverMatrix,
     SystemicTier,
+    compare_constructors,
     network_nash,
     network_stackelberg,
     transmission_ranking,
@@ -148,6 +150,53 @@ def test_an_estimated_matrix_is_marked_derived():
     assert "two-country VAR" in result.note
 
 
+# --- the literature-anchored constructor -----------------------------------
+
+def test_a_literature_anchored_matrix_is_marked_derived():
+    """The magnitude comes from a published estimate, so it is not a guess.
+
+    Still DERIVED rather than SOURCED: the allocation across pairs is the
+    tier structure rather than a bilateral estimate, and the published
+    figure is a bond yield response used as a proxy for an output gap.
+    """
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    assert matrix.confidence is Confidence.DERIVED
+    assert "IMF" in matrix.source
+
+
+def test_the_anchor_to_recipient_cell_matches_the_published_estimate():
+    """The point of the constructor: the strongest cell equals the figure
+    it was anchored to, and every other pair scales down from it."""
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    fed = matrix.index_of(FED.name)
+    rbi = matrix.index_of(RBI.name)
+    assert matrix.demand[rbi, fed] == pytest.approx(0.36, abs=1e-9)
+
+
+def test_the_sourced_matrix_is_close_to_the_guess():
+    """A large divergence would mean the original guess was doing real work
+    and every result built on it should be rerun. Twenty percent is enough
+    to matter and small enough that the structure was sound."""
+    comparison = compare_constructors()
+    assert comparison["relative_difference"] < 0.5
+    assert comparison["derived_confidence"] == "derived"
+
+
+def test_the_literature_matrix_keeps_the_asymmetry():
+    """Anchoring the magnitude must not flatten the hierarchy."""
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    assert matrix.is_symmetric is False
+    outward = matrix.outward_influence()
+    assert max(outward, key=outward.get) == FED.name
+
+
+def test_a_zero_anchor_is_rejected():
+    with pytest.raises(EngineError, match="must be positive"):
+        SpilloverMatrix.from_literature(DEFAULT_TIERS, anchor_to_recipient=0.0)
+
+
+# --- validation ------------------------------------------------------------
+
 def test_an_estimated_matrix_must_cite_a_source():
     matrix = np.zeros((2, 2))
     with pytest.raises(EngineError, match="cite its source"):
@@ -156,7 +205,9 @@ def test_an_estimated_matrix_must_cite_a_source():
 
 def test_a_wrong_shaped_matrix_is_rejected():
     with pytest.raises(Exception, match="expected"):
-        SpilloverMatrix(names=("A", "B"), demand=np.zeros((3, 3)), exchange=np.zeros((2, 2)))
+        SpilloverMatrix(
+            names=("A", "B"), demand=np.zeros((3, 3)), exchange=np.zeros((2, 2))
+        )
 
 
 def test_a_matrix_with_nan_is_rejected():
@@ -187,6 +238,11 @@ def test_the_matrix_serialises_with_its_provenance(spillovers):
     assert payload["confidence"] == "assumed"
     assert payload["is_symmetric"] is False
     assert len(payload["demand"]) == len(spillovers.names)
+
+
+def test_the_serialised_matrix_carries_its_source():
+    payload = SpilloverMatrix.from_literature(DEFAULT_TIERS).to_ledger_dict()
+    assert "IMF" in payload["source"]
 
 
 # --- the two-player consistency check --------------------------------------
@@ -228,6 +284,12 @@ def test_the_system_is_well_conditioned(spillovers):
     equilibrium = network_nash(BANKS, spillovers)
     assert equilibrium.is_well_conditioned
     assert equilibrium.condition_number < 100
+
+
+def test_the_literature_matrix_also_solves():
+    """Stronger spillovers must not destabilise the reaction system."""
+    equilibrium = network_nash(BANKS, SpilloverMatrix.from_literature(DEFAULT_TIERS))
+    assert equilibrium.is_well_conditioned
 
 
 def test_the_solution_is_deterministic(spillovers):
@@ -311,6 +373,28 @@ def test_the_recipient_follows_more_than_the_anchor_would():
 def test_the_shocked_bank_is_excluded_from_pass_through(spillovers):
     ranking = transmission_ranking(BANKS, spillovers, FED.name)
     assert FED.name not in ranking["pass_through"]
+
+
+def test_transmission_reports_the_spillover_provenance():
+    """A pass-through figure means something different depending on whether
+    the matrix behind it was sourced or guessed."""
+    ranking = transmission_ranking(
+        BANKS, SpilloverMatrix.from_literature(DEFAULT_TIERS), FED.name
+    )
+    assert ranking["spillover_confidence"] == "derived"
+    assert "IMF" in ranking["spillover_source"]
+
+
+def test_stronger_spillovers_raise_pass_through():
+    """The sourced matrix is twenty percent stronger than the guess, so
+    followers should follow further."""
+    weak = transmission_ranking(
+        BANKS, SpilloverMatrix.from_tiers(DEFAULT_TIERS), FED.name
+    )["pass_through"]
+    strong = transmission_ranking(
+        BANKS, SpilloverMatrix.from_literature(DEFAULT_TIERS), FED.name
+    )["pass_through"]
+    assert strong[RBI.name] > weak[RBI.name]
 
 
 # --- Stackelberg -----------------------------------------------------------

@@ -7,17 +7,23 @@ every other economy, while an RBI move reaches almost none. Modelling five
 banks with identical spillovers would erase the one feature that makes the
 international monetary system worth modelling at all.
 
-Spillovers are therefore tiered by the economy's systemic weight. That is
-an assumption, and it is marked as one, but it encodes something real: the
+Spillovers are tiered by the economy's systemic weight. That is an
+assumption, and it is marked as one, but it encodes something real: the
 dollar's reserve status means the Fed exports its policy stance whether it
 intends to or not, and the literature on the global financial cycle
 documents the asymmetry directly.
 
-The tiering is a placeholder for estimation. `SpilloverMatrix.from_var`
-accepts magnitudes recovered from a multi-country VAR, and any matrix
-built that way is marked DERIVED rather than ASSUMED. Until that
-estimation exists, the tiers are a structured guess and the confidence
-flag says so.
+Two constructors, with different provenance:
+
+    from_tiers        a structured guess, marked ASSUMED
+    from_literature   anchored to published spillover estimates, DERIVED
+    from_var          estimated from a multi-country VAR, DERIVED
+
+The tiering is a placeholder for estimation. Until a multi-country VAR
+exists, from_literature is the better default: it takes its magnitude from
+a published estimate and applies the tier structure only to distribute
+that magnitude across pairs, so the number is sourced even though the
+allocation is not.
 
 On solution concepts at N players:
 
@@ -52,6 +58,32 @@ log = get_logger(__name__)
 #: Above this, the reaction system is near-singular and the equilibrium is
 #: extremely sensitive to the assumed weights.
 MAX_CONDITION_NUMBER = 1e4
+
+# ---- published spillover estimates ----------------------------------------
+
+IMF_SPILLOVER_SOURCE = (
+    "IMF Working Paper 2023/107, Spillovers to Emerging Markets from US "
+    "Economic News and Monetary Policy: a one percentage point US tightening "
+    "raises emerging market local currency government bond yields by "
+    "approximately 36 basis points"
+)
+
+#: Pass-through of a US policy tightening to emerging market bond yields.
+#: The anchor for the whole matrix: the tier structure distributes this
+#: magnitude across pairs, so the level is sourced even though the
+#: allocation across the other four economies is not.
+US_TO_EM_YIELD_PASSTHROUGH = 0.36
+
+#: The literature on the global financial cycle documents that flexible
+#: exchange rates do not insulate emerging markets from US monetary policy
+#: surprises, and India is repeatedly identified as among the most exposed
+#: economies. Those are qualitative findings and they support the tier
+#: assignment below rather than fixing its magnitudes.
+GLOBAL_FINANCIAL_CYCLE_SOURCE = (
+    "Rey (2015) on the global financial cycle; Lakdawala (2021) on India's "
+    "sensitivity to US monetary policy; IMF WP 2023/107 on the absence of "
+    "exchange rate insulation"
+)
 
 
 class SystemicTier(StrEnum):
@@ -128,6 +160,7 @@ class SpilloverMatrix(BaseModel):
     own_inflation_effect: float = Field(default=0.80, ge=0)
     confidence: Confidence = Confidence.ASSUMED
     note: str = ""
+    source: str = Field(default="", description="Citation, when there is one.")
 
     @model_validator(mode="after")
     def _matrices_are_square_and_matched(self) -> SpilloverMatrix:
@@ -177,6 +210,7 @@ class SpilloverMatrix(BaseModel):
         return {
             "names": list(self.names),
             "confidence": self.confidence.value,
+            "source": self.source,
             "note": self.note,
             "is_symmetric": self.is_symmetric,
             "outward_influence": {
@@ -206,6 +240,10 @@ class SpilloverMatrix(BaseModel):
         anchor economy reaching a recipient gets the full base, while a
         recipient reaching an anchor gets base times 0.05 times 0.10,
         which is effectively nothing.
+
+        Marked ASSUMED. Both the base magnitude and the tier multipliers
+        are chosen rather than estimated. Prefer from_literature, which
+        takes the base magnitude from a published estimate.
         """
         names = tuple(tiers)
         n = len(names)
@@ -236,8 +274,87 @@ class SpilloverMatrix(BaseModel):
                 "Built from systemic tiers rather than estimated. The tier "
                 "assignment encodes the hierarchy documented in the global "
                 "financial cycle literature, but the magnitudes are a "
-                "structured guess. Replace with from_var once a "
-                "multi-country VAR is available."
+                "structured guess. Prefer from_literature or from_var."
+            ),
+        )
+
+    @classmethod
+    def from_literature(
+        cls,
+        tiers: dict[str, SystemicTier],
+        *,
+        anchor_to_recipient: float = US_TO_EM_YIELD_PASSTHROUGH,
+        exchange_ratio: float = 1.17,
+        own_output_effect: float = 1.20,
+        own_inflation_effect: float = 0.80,
+    ) -> SpilloverMatrix:
+        """Build a matrix anchored to a published spillover estimate.
+
+        The anchor is the strongest cell in the matrix: an anchor economy
+        reaching a recipient. The IMF estimates that a one percentage point
+        US tightening raises emerging market local currency government bond
+        yields by roughly 36 basis points, so that cell is set to 0.36 and
+        every other pair is scaled down from it by the tier structure.
+
+        What this does and does not establish. The magnitude is sourced;
+        the allocation across the other four economies is not, because the
+        published figure is an emerging market aggregate rather than a
+        bilateral matrix. And the figure is a bond yield response, whereas
+        the demand channel here is an output gap response, so treating one
+        as a proxy for the other is an assumption in its own right. The
+        result is therefore DERIVED rather than SOURCED: arithmetic on a
+        published number, with the derivation stated.
+
+        `exchange_ratio` preserves the relative weight of the exchange
+        channel from the tiered version, where the base magnitudes were
+        0.35 and 0.30.
+        """
+        names = tuple(tiers)
+        n = len(names)
+        if n < 2:
+            raise EngineError("a network needs at least two banks")
+        if anchor_to_recipient <= 0:
+            raise EngineError("the anchor magnitude must be positive")
+
+        # Normalise so that the anchor-to-recipient pair equals the
+        # published estimate exactly, and everything else scales from it.
+        reference = (
+            SystemicTier.ANCHOR.outward_strength
+            * SystemicTier.RECIPIENT.inward_sensitivity
+        )
+        base_demand = anchor_to_recipient / reference
+        base_exchange = base_demand * exchange_ratio
+
+        demand = np.zeros((n, n))
+        exchange = np.zeros((n, n))
+
+        for i, receiver in enumerate(names):
+            for j, sender in enumerate(names):
+                if i == j:
+                    continue
+                strength = (
+                    tiers[sender].outward_strength * tiers[receiver].inward_sensitivity
+                )
+                demand[i, j] = base_demand * strength
+                exchange[i, j] = base_exchange * strength
+
+        return cls(
+            names=names,
+            demand=demand,
+            exchange=exchange,
+            own_output_effect=own_output_effect,
+            own_inflation_effect=own_inflation_effect,
+            confidence=Confidence.DERIVED,
+            source=IMF_SPILLOVER_SOURCE,
+            note=(
+                f"Anchored to a published estimate of {anchor_to_recipient:.2f} "
+                f"for the anchor-to-recipient pair, with the tier structure "
+                f"distributing that magnitude across the remaining pairs. The "
+                f"level is sourced; the allocation is not, because the "
+                f"published figure is an emerging market aggregate. The "
+                f"published response is a bond yield rather than an output "
+                f"gap, so the proxy is a further assumption. "
+                f"Supporting qualitative evidence: {GLOBAL_FINANCIAL_CYCLE_SOURCE}."
             ),
         )
 
@@ -256,7 +373,8 @@ class SpilloverMatrix(BaseModel):
 
         The honest source. Entry (i, j) should be the peak response of
         economy i's output gap to a one standard deviation policy shock in
-        economy j, taken from a multi-country VAR.
+        economy j, taken from a multi-country VAR. Unlike from_literature,
+        this needs no proxy assumption and no allocation guess.
         """
         if not source.strip():
             raise EngineError("an estimated matrix must cite its source")
@@ -268,6 +386,7 @@ class SpilloverMatrix(BaseModel):
             own_output_effect=own_output_effect,
             own_inflation_effect=own_inflation_effect,
             confidence=Confidence.DERIVED,
+            source=source,
             note=f"estimated: {source}",
         )
 
@@ -276,11 +395,13 @@ class SpilloverMatrix(BaseModel):
 #:
 #: The Fed is the anchor: dollar invoicing, dollar funding markets and the
 #: global financial cycle mean its stance is exported whether or not that
-#: is intended. The ECB and BoJ issue major reserve currencies with wide
-#: regional reach. The Bank of England is regional: significant in European
-#: financial markets, limited globally. The RBI is a recipient, which is
-#: precisely why its published objective function includes capital flow
-#: management while the Fed's does not.
+#: is intended, and the literature finds flexible exchange rates do not
+#: insulate against it. The ECB and BoJ issue major reserve currencies with
+#: wide regional reach. The Bank of England is regional: significant in
+#: European financial markets, limited globally. The RBI is a recipient,
+#: and India is repeatedly identified as among the economies most exposed
+#: to US monetary policy, which is also why its published objective
+#: function includes capital flow management while the Fed's does not.
 DEFAULT_TIERS: dict[str, SystemicTier] = {
     "Federal Reserve": SystemicTier.ANCHOR,
     "European Central Bank": SystemicTier.MAJOR,
@@ -288,6 +409,36 @@ DEFAULT_TIERS: dict[str, SystemicTier] = {
     "Bank of England": SystemicTier.REGIONAL,
     "Reserve Bank of India": SystemicTier.RECIPIENT,
 }
+
+
+def compare_constructors(
+    tiers: dict[str, SystemicTier] = DEFAULT_TIERS,
+) -> dict[str, Any]:
+    """How far the assumed matrix sits from the sourced one.
+
+    If the two are close, the original guess was reasonable and the
+    published anchor mostly confirms it. If they diverge, the guess was
+    doing real work and any result built on it should be rerun.
+    """
+    assumed = SpilloverMatrix.from_tiers(tiers)
+    derived = SpilloverMatrix.from_literature(tiers)
+
+    difference = np.abs(
+        np.asarray(derived.demand) - np.asarray(assumed.demand)
+    )
+    scale = float(np.abs(np.asarray(assumed.demand)).max())
+
+    return {
+        "assumed_max_cell": round(float(np.asarray(assumed.demand).max()), 4),
+        "derived_max_cell": round(float(np.asarray(derived.demand).max()), 4),
+        "max_absolute_difference": round(float(difference.max()), 4),
+        "relative_difference": round(
+            float(difference.max() / scale) if scale else 0.0, 4
+        ),
+        "assumed_confidence": assumed.confidence.value,
+        "derived_confidence": derived.confidence.value,
+        "source": derived.source,
+    }
 
 
 class NetworkEquilibrium(BaseModel):
@@ -349,7 +500,6 @@ def _reaction_system(
         we, ws = bank.external_weight, bank.smoothing_weight
 
         # Inflation of economy i as a linear function of the rate vector.
-        # inflation_i = pi0_i - own*(r_i - r0_i) - sum_j x_ij*((r_i - r0_i) - (r_j - r0_j))
         inf_coefficients = np.zeros(n)
         inf_coefficients[i] = -spillovers.own_inflation_effect
         if we > 0:
@@ -360,7 +510,9 @@ def _reaction_system(
                 inf_coefficients[j] += exchange[i, j]
 
         inf_constant = bank.current_inflation - bank.inflation_target
-        inf_constant -= float(inf_coefficients @ np.array([b.current_rate for b in banks]))
+        inf_constant -= float(
+            inf_coefficients @ np.array([b.current_rate for b in banks])
+        )
 
         # Output gap of economy i.
         out_coefficients = np.zeros(n)
@@ -479,6 +631,7 @@ def network_nash(
         "network_nash_solved",
         n_banks=len(ordered),
         condition=round(condition, 1),
+        spillover_confidence=spillovers.confidence.value,
         rates={k: round(v, 5) for k, v in rates.items()},
     )
     return equilibrium
@@ -515,7 +668,9 @@ def network_stackelberg(
 
     if grid is None:
         centre = leader.current_rate
-        grid = tuple(np.round(np.linspace(max(centre - 0.03, 0.0), centre + 0.05, 33), 6))
+        grid = tuple(
+            np.round(np.linspace(max(centre - 0.03, 0.0), centre + 0.05, 33), 6)
+        )
 
     best_loss = np.inf
     best: NetworkEquilibrium | None = None
@@ -607,4 +762,6 @@ def transmission_ranking(
             if k != shocked
         },
         "baseline_rates": {k: round(v, 6) for k, v in baseline.rates.items()},
+        "spillover_confidence": spillovers.confidence.value,
+        "spillover_source": spillovers.source,
     }
