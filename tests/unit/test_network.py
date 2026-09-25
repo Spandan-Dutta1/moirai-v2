@@ -30,7 +30,6 @@ from moirai.engine.financial.central_banks import (
 from moirai.engine.financial.game import Confidence
 from moirai.engine.financial.network import (
     DEFAULT_TIERS,
-    NetworkEquilibrium,
     SpilloverMatrix,
     SystemicTier,
     compare_constructors,

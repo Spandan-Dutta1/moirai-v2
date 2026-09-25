@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,127 tests. Nine architecture decision records. No external API
+**1,136 tests. Nine architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -194,7 +194,7 @@ out-of-sample validation results.
 ## Development
 
 ```bash
-pytest              # 1,127 tests
+pytest              # 1,136 tests
 ruff check .        # lint
 mypy src/moirai     # type check
 ```

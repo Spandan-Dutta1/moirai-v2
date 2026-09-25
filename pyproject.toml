@@ -42,6 +42,7 @@ target-version = "py311"
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B017"]   # frozen-model errors vary by library version
 "scripts/**" = ["E402"] # scratch scripts, not library code
+"src/moirai/engine/financial/commercial_banks.py" = ["E501"]  # bank data table
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
