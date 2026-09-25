@@ -26,9 +26,20 @@ to the declared targets by grid search rather than chosen.
 
 Confidence takes three values:
 
-- **SOURCED**: taken directly from a named published statistic
-- **DERIVED**: arithmetic on published statistics, with the derivation stated
+- **SOURCED**: the value is taken directly from a named published
+  statistic, whose concept and definition match what the model measures
+- **DERIVED**: the value is computed by arithmetic on published statistics,
+  with the derivation stated
 - **UNSOURCED**: nobody has sourced this yet; provisional everywhere
+
+The flag records where the value came from, not how good the source is.
+Limitations of a published statistic, such as a working paper rather than
+a journal article, a population that differs from the model's (all-India
+against urban), imputed inputs or a robustness row, go in the target's
+note. They do not demote a SOURCED value to DERIVED. DERIVED is reserved
+for values that required arithmetic to obtain. A value becomes SOURCED only
+when a named published statistic supplies it; the flag is never raised on
+judgement.
 
 The calibration report shows every target with its confidence, including
 the ones that were missed.
@@ -42,17 +53,22 @@ the ones that were missed.
 | mean_debt_to_mean_income | 0.50 | DERIVED | AIDIS mean urban debt over an assumed mean income |
 | wealth_gini | 0.75 | UNSOURCED | not verified |
 | income_gini | 0.50 | UNSOURCED | not verified |
-| share_hand_to_mouth | 0.40 | UNSOURCED | no Indian estimate located |
+| share_hand_to_mouth | 0.374 | SOURCED | Gupta, Pizzolon and Singh (2025), Table 5, monthly pay period |
 | indebtedness_gradient | 7.0 | UNSOURCED | qualitative direction only |
 
-Four of seven targets remain unsourced. Two of those may not be sourceable
-as stated:
+The hand-to-mouth share was originally 0.40 and unsourced, on the belief
+that no Indian estimate in the Kaplan, Violante and Weidner sense existed.
+One does: Gupta, Pizzolon and Singh (2025, working paper) apply the KVW
+method to AIDIS 2019, with income imputed from CPHS. Their monthly pay
+period row uses a half-month threshold, which matches this model's
+definition, and gives a total share of 0.374. The total rather than the
+poor-only share is used because the model has one liquid wealth field.
+The estimate covers all of India, not urban households alone. The note on
+the target records this and the other limitations. `log_wealth_mean` was
+deliberately not re-fitted to the new target (see ADR 008).
 
-- **Hand-to-mouth share** in the Kaplan, Violante and Weidner sense
-  requires separating liquid from illiquid assets. AIDIS reports total
-  assets dominated by land and buildings, and may not support the
-  decomposition. This is the single most consequential target for the
-  aggregate consumption response and the least well grounded.
+Three of seven targets remain unsourced. One of those may not be sourceable
+as stated:
 
 - **Indebtedness gradient by income quintile** is not reported by AIDIS,
   which tabulates by asset decile instead. The target encodes a direction,

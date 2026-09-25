@@ -262,16 +262,40 @@ URBAN_INDIA_MOMENTS: tuple[Moment, ...] = (
     ),
     Moment(
         name="share_hand_to_mouth",
-        target=0.40,
+        target=0.374,
         tolerance=0.12,
-        source="not verified for India",
-        confidence=Confidence.UNSOURCED,
+        source=(
+            "Gupta, Pizzolon and Singh (2025), Identifying Hand-to-Mouth "
+            "Households: Evidence from India, Table 5"
+        ),
+        confidence=Confidence.SOURCED,
         note=(
-            "Kaplan, Violante and Weidner estimate roughly 30 percent for the "
-            "United States including the wealthy hand to mouth. India is "
-            "plausibly higher, but no Indian estimate has been located. This "
-            "is the single most consequential target for the aggregate "
-            "consumption response, and it is the least well grounded."
+            "Gupta, Pizzolon and Singh (2025 working paper), Table 5, monthly "
+            "pay period: total hand-to-mouth share 0.374 (poor 0.052, wealthy "
+            "0.322) from AIDIS 2019 with income imputed from CPHS. The monthly "
+            "row's threshold of half a month's income matches this model's "
+            "definition. The total is used because the model has a single "
+            "liquid wealth field, so poor and wealthy hand-to-mouth behave "
+            "identically here. Limitations: the estimate is all-India, while "
+            "this model is calibrated to urban households, and no urban split "
+            "is reported; income is imputed; and the monthly figure is a "
+            "robustness row for one imputation method. For comparison, KVW "
+            "estimate about one-third for the US at a one-week threshold. "
+            "Structural limitation: the model has no illiquid wealth, and "
+            "liquid wealth is positively correlated with income, so its "
+            "hand-to-mouth households are concentrated at low incomes, "
+            "resembling the poor hand-to-mouth. In the data, 86 percent of "
+            "the total (0.322 of 0.374) are wealthy hand-to-mouth, who hold "
+            "illiquid assets and are not concentrated at low incomes. The "
+            "model can match the share but probably misplaces these "
+            "households in the income and debt distribution, which affects "
+            "how hand-to-mouth status overlaps with rate exposure. The "
+            "remaining gap in the share itself is a calibration gap, not a "
+            "structural one: log_wealth_mean was fitted to the earlier 0.40 "
+            "target and could close it by re-calibration. It is deliberately "
+            "not re-fitted, because ADR 008 records it as a fitted-to-target "
+            "parameter and fitting it to a second target would compound that "
+            "circularity. The gap against a published figure is left visible."
         ),
     ),
     Moment(
