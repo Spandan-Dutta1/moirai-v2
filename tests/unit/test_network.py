@@ -429,11 +429,66 @@ def test_an_unknown_leader_is_rejected(spillovers):
 
 
 def test_a_custom_grid_is_used(spillovers):
-    """Approximately, not exactly. The leader is pinned with a very large
-    but finite smoothing weight rather than an infinite one, so it lands
-    within a hair of the grid point rather than on it."""
+    """Exactly: the leader chooses among the given rates and nothing else."""
     led = network_stackelberg(BANKS, spillovers, FED.name, grid=(0.04, 0.05, 0.06))
-    assert min(abs(led.rates[FED.name] - g) for g in (0.04, 0.05, 0.06)) < 1e-6
+    assert led.rates[FED.name] in (0.04, 0.05, 0.06)
+
+
+def test_followers_answer_the_leaders_nash_rate_with_their_nash_rates(spillovers):
+    """The followers' reaction function, checked at a point where the answer
+    is known independently. At the simultaneous equilibrium every
+    follower is already best-responding to the leader's rate, so a leader
+    restricted to that rate must leave every follower exactly there.
+
+    This is the test the pinning device failed. It overwrote the leader's
+    current rate with the candidate, which hid the leader's move from
+    every spillover channel, and the followers answered a different
+    question.
+    """
+    nash = network_nash(BANKS, spillovers)
+    led = network_stackelberg(BANKS, spillovers, FED.name, grid=(nash.rates[FED.name],))
+    for bank in (ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI):
+        assert led.rates[bank.name] == pytest.approx(nash.rates[bank.name], abs=1e-10)
+
+
+def test_two_banks_reproduce_the_pairwise_stackelberg():
+    """Against an independent implementation: the two-player game's own
+    backward induction, with payoffs built from SpilloverParameters rather
+    than the reaction system. The matrices match the parameters, as in the
+    Nash consistency test. Both solvers use the same five basis point grid
+    for the leader. The pairwise follower is also restricted to the grid,
+    so it can sit up to half a step from the network's continuous reply.
+    The pinning solver missed by more than a step."""
+    from moirai.engine.financial.central_banks import build_policy_game
+    from moirai.engine.financial.game import stackelberg_equilibrium
+
+    matrix = SpilloverMatrix(
+        names=(FED.name, RBI.name),
+        demand=np.array([[0.0, 0.25], [0.25, 0.0]]),
+        exchange=np.array([[0.0, 0.30], [0.30, 0.0]]),
+        own_output_effect=1.20,
+        own_inflation_effect=0.80,
+    )
+    grid = tuple(np.round(np.arange(0.03, 0.08, 0.0005), 6))
+
+    network = network_stackelberg((FED, RBI), matrix, FED.name, grid=grid)
+    pairwise = stackelberg_equilibrium(
+        build_policy_game(FED, RBI, spillovers=SpilloverParameters(), rate_grid=grid),
+        FED.name,
+    )
+
+    assert network.rates[FED.name] == pytest.approx(pairwise.actions[FED.name], abs=1e-9)
+    assert network.rates[RBI.name] == pytest.approx(pairwise.actions[RBI.name], abs=0.00025)
+
+
+def test_a_leader_whose_optimum_lies_outside_the_search_is_refused(spillovers):
+    """A boundary answer from the default search is the range talking, not
+    the leader."""
+    runaway = FED.model_copy(update={"current_inflation": 0.30})
+    with pytest.raises(EngineError, match="edge of the range"):
+        network_stackelberg(
+            (runaway, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI), spillovers, FED.name
+        )
 
 
 # --- structural properties -------------------------------------------------

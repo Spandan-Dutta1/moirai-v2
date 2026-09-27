@@ -653,79 +653,132 @@ def network_stackelberg(
     other central banks take Federal Reserve policy as given, and they do
     not queue up behind each other.
 
-    Solved by searching the leader's action grid and computing the
-    followers' simultaneous equilibrium at each point. The followers'
-    problem is linear, so each evaluation is one linear solve.
+    Solved by backward induction, as the two-player
+    `game.stackelberg_equilibrium` is. The followers' first order
+    conditions are the follower rows of the network's linear reaction
+    system, so their simultaneous equilibrium is an exact affine function
+    of the leader's rate. The leader then minimises its true loss along
+    that reaction function.
+
+    An earlier version pinned the leader by overwriting its current rate
+    with each candidate. Every spillover is driven by a bank's move away
+    from its current rate, so the pin made the leader's move invisible to
+    the followers: with the Fed leading, the RBI answered a 100 basis
+    point Fed tightening with 3. Every bank here keeps its true current
+    rate.
+
+    With `grid` given, the leader chooses only among those rates. Without
+    it, a one basis point grid around the leader's current rate is
+    searched and the best point refined continuously. The leader's loss is
+    convex in its own rate, because the reaction function is affine and
+    every loss term is convex in the outcomes, so the refinement finds the
+    optimum rather than a local one.
+
+    Raises
+    ------
+    EngineError
+        If the followers' reaction system is singular, or if the default
+        search lands on its upper edge or on a lower edge above zero, where
+        the true optimum lies outside the range searched.
     """
+    from scipy.optimize import minimize_scalar
+
     names = tuple(b.name for b in banks)
     if leader_name not in names:
         raise EngineError(f"no bank named {leader_name!r}; have {sorted(names)}")
     if len(banks) < 2:
         raise EngineError("a network needs at least two banks")
-
-    leader = next(b for b in banks if b.name == leader_name)
-    followers = tuple(b for b in banks if b.name != leader_name)
-
-    if grid is None:
-        centre = leader.current_rate
-        grid = tuple(
-            np.round(np.linspace(max(centre - 0.03, 0.0), centre + 0.05, 33), 6)
+    if set(names) != set(spillovers.names):
+        raise EngineError(
+            f"banks {sorted(names)} do not match the spillover matrix "
+            f"{sorted(spillovers.names)}"
         )
 
-    best_loss = np.inf
-    best: NetworkEquilibrium | None = None
+    ordered = tuple(next(b for b in banks if b.name == n) for n in spillovers.names)
+    leader_index = spillovers.names.index(leader_name)
+    followers = [i for i in range(len(ordered)) if i != leader_index]
+    leader = ordered[leader_index]
 
-    for candidate in grid:
-        # Pin the leader by giving it an overwhelming smoothing weight
-        # anchored at the candidate rate: it then has no incentive to move.
-        pinned = leader.model_copy(
-            update={"current_rate": float(candidate), "smoothing_weight": 1e6}
+    # ---- the followers' reaction function, from their rows of A r = b ----
+    matrix, rhs = _reaction_system(ordered, spillovers)
+    among_followers = matrix[np.ix_(followers, followers)]
+    on_leader = matrix[followers, leader_index]
+    condition = float(np.linalg.cond(among_followers))
+
+    if not np.isfinite(condition) or condition > 1e10:
+        raise EngineError(
+            f"the followers' reaction system is singular (condition "
+            f"{condition:.2e}), so their response to the leader is not unique"
         )
-        trial = (pinned, *followers)
 
-        try:
-            outcome = network_nash(trial, spillovers)
-        except EngineError:
-            continue
-
-        rates = np.array([outcome.rates[n] for n in spillovers.names])
-        ordered = tuple(
-            next(b for b in trial if b.name == n) for n in spillovers.names
+    def respond(leader_rate: float) -> np.ndarray:
+        rates = np.empty(len(ordered))
+        rates[leader_index] = leader_rate
+        rates[followers] = np.linalg.solve(
+            among_followers, rhs[followers] - on_leader * leader_rate
         )
-        # Evaluate the leader's loss with its true preferences, not the
-        # pinned ones, since the pin is a solving device rather than a
-        # change in what the leader wants.
-        true_ordered = tuple(
-            leader if b.name == leader_name else b for b in ordered
-        )
-        losses = _losses_at(true_ordered, rates, spillovers)
+        return rates
 
-        if losses[leader_name] < best_loss:
-            best_loss = losses[leader_name]
-            best = NetworkEquilibrium(
-                rates=dict(outcome.rates),
-                losses=losses,
-                concept="network_stackelberg",
-                condition_number=outcome.condition_number,
-                is_well_conditioned=outcome.is_well_conditioned,
-                leader=leader_name,
-                note=(
-                    f"{leader_name} moves first; the remaining "
-                    f"{len(followers)} banks respond simultaneously. A full "
-                    f"sequential ordering would be a different game."
-                ),
+    def leader_loss(leader_rate: float) -> float:
+        return _losses_at(ordered, respond(leader_rate), spillovers)[leader_name]
+
+    # ---- the leader optimises along it ----
+    if grid is not None:
+        if not grid:
+            raise EngineError("the leader's grid is empty")
+        candidates = np.asarray(grid, dtype=float)
+        values = np.array([leader_loss(float(c)) for c in candidates])
+        chosen = float(candidates[int(np.argmin(values))])
+    else:
+        low = max(leader.current_rate - 0.03, 0.0)
+        high = leader.current_rate + 0.05
+        candidates = np.round(np.arange(low, high + 5e-5, 0.0001), 6)
+        values = np.array([leader_loss(float(c)) for c in candidates])
+        best = int(np.argmin(values))
+
+        at_upper = best == len(candidates) - 1
+        at_lower = best == 0 and low > 0.0
+        if at_upper or at_lower:
+            raise EngineError(
+                f"{leader_name}'s optimal rate lies at the edge of the range "
+                f"searched ({candidates[best]:.2%} in [{low:.2%}, {high:.2%}]), so "
+                f"the true optimum is outside it. Pass a wider grid."
             )
 
-    if best is None:
-        raise EngineError("no leader action produced a solvable follower equilibrium")
+        chosen = float(candidates[best])
+        bracket = (
+            float(candidates[max(best - 1, 0)]),
+            float(candidates[min(best + 1, len(candidates) - 1)]),
+        )
+        if bracket[1] > bracket[0]:
+            refined = minimize_scalar(
+                leader_loss, bounds=bracket, method="bounded", options={"xatol": 1e-9}
+            )
+            if refined.success and float(refined.fun) <= values[best]:
+                chosen = float(refined.x)
+
+    rates = respond(chosen)
+    equilibrium = NetworkEquilibrium(
+        rates={ordered[i].name: float(rates[i]) for i in range(len(ordered))},
+        losses=_losses_at(ordered, rates, spillovers),
+        concept="network_stackelberg",
+        condition_number=condition,
+        is_well_conditioned=condition < MAX_CONDITION_NUMBER,
+        leader=leader_name,
+        note=(
+            f"{leader_name} moves first; the remaining "
+            f"{len(followers)} banks respond simultaneously. A full "
+            f"sequential ordering would be a different game."
+        ),
+    )
 
     log.info(
         "network_stackelberg_solved",
         leader=leader_name,
         n_followers=len(followers),
-        rates={k: round(v, 5) for k, v in best.rates.items()},
+        rates={k: round(v, 5) for k, v in equilibrium.rates.items()},
     )
-    return best
+    return equilibrium
 
 
 def transmission_ranking(
