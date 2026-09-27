@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,136 tests. Nine architecture decision records. No external API
+**1,152 tests. Ten architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -18,13 +18,18 @@ A monetary tightening looks almost neutral in aggregate and is not.
 
 | | consumption change |
 |---|---|
-| floating-rate borrowers | **-4.48%** |
-| fixed-rate borrowers | -1.10% |
-| net savers | -0.30% |
-| **aggregate** | **-0.75%** |
+| floating-rate borrowers | **-2.94%** |
+| fixed-rate borrowers | -0.51% |
+| net savers | -0.18% |
+| **aggregate** | **-0.45%** |
+
+The `us_inflation_shock` scenario: the part of the Fed's move caused by
+US inflation at 4.5 percent, measured against the same game without that
+condition (ADR 012). The rate path is American, delivered to households
+calibrated to India.
 
 A representative-household model reports the aggregate and concludes
-monetary policy barely moves consumption. The four-point spread is the
+monetary policy barely moves consumption. The near three-point spread is the
 finding, and it is invisible without heterogeneity. It is also the
 intuition that heterogeneous-agent models formalise: policy works largely
 through income and redistribution rather than intertemporal substitution.
@@ -170,8 +175,12 @@ checked against their closed form.
   direction of the bias is known: general equilibrium amplifies, so these
   estimates are conservative.
 - **The Indian VAR is not credibly identified.** Output rises after a rate
-  hike across four specifications, which is the RBI tightening into
-  expected strength. Documented in ADR 007; the result is withheld.
+  hike across six specifications, which is the RBI tightening into
+  expected strength. Documented in ADRs 007 and 012; the result is withheld.
+- **Indian-origin scenarios borrow the US transmission.** Its inflation
+  response has the wrong sign for India and its persistence exceeds Indian
+  estimates, so those scenarios hold inflation at baseline and stop at 30
+  months. Fixed-rate borrowers' results depend on that choice. ADR 012.
 - **Roughly 15 sourced parameters against 35-40 assumed ones**, audited in
   ADR 008. Layers 0 and 1 rest on data; layers 2 and 3 rest substantially
   on judgement.
@@ -184,10 +193,11 @@ checked against their closed form.
 
 ## Decisions
 
-Nine ADRs in `docs/decisions/`, including why the LLM belief society was
+Ten ADRs in `docs/decisions/`, including why the LLM belief society was
 removed, why Indian data uses year-on-year series, why the Indian VAR is
-not credibly identified, the parameter provenance audit, and the
-out-of-sample validation results.
+not credibly identified, the parameter provenance audit, the
+out-of-sample validation results, and how Indian-origin scenarios use the
+US transmission.
 
 ---
 
