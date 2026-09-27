@@ -118,6 +118,14 @@ class StabilityResult(BaseModel):
     def half_life(self) -> float | None:
         """Periods for the most persistent component to decay by half.
 
+        This is a property of the system, not of any particular shock: it
+        is log(0.5) / log(max modulus) for the slowest eigenmode of the
+        companion matrix, and bounds how fast every impulse response
+        eventually dies out. It is not the half-life of the policy rate's
+        response to a policy shock, which can be much longer. In the
+        1985-2007 US specification this is 12.7 months while the cumulative
+        rate response has not halved from its peak by month 60.
+
         None when the system is not stable, since nothing decays.
         """
         if not self.is_stable or self.max_modulus <= 0:

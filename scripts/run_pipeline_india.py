@@ -124,7 +124,7 @@ report = diagnose(var, portmanteau_lags=N_LAGS + 12)
 print(f"\n  VAR({var.n_lags}) on {var.n_variables} variables")
 print(f"    observations per parameter : {var.n_observations / var.n_parameters:.1f}")
 print(f"    max eigenvalue modulus     : {var.stability.max_modulus:.3f}")
-print(f"    shock half life            : {var.stability.half_life:.1f} months")
+print(f"    slowest mode half life     : {var.stability.half_life:.1f} months")
 
 print(f"\n  diagnostics: usable = {report.is_usable}")
 for outcome in report.critical_failures:
