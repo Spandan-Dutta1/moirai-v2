@@ -271,6 +271,45 @@ def test_two_banks_reproduce_the_pairwise_solver():
         assert network.rates[name] == pytest.approx(pairwise.rates[name], abs=0.005)
 
 
+def test_the_simultaneous_solution_is_a_best_reply_under_the_stated_loss(spillovers):
+    """The reaction system must be the first order condition of the loss
+    the banks actually carry, or the solved rates are not an equilibrium.
+
+    Checked where it used to fail: with the Fed tightening, the Fed sits
+    above the RBI and the other three below it. The external term was
+    once the mean absolute gap to each rate, which the linear system
+    cannot represent, and the RBI's true best reply sat 9bp from its
+    solved rate. The pairwise test cannot see this, because with two
+    banks the two definitions coincide.
+    """
+    from scipy.optimize import minimize_scalar
+
+    from moirai.engine.financial.network import _losses_at
+
+    banks = tuple(
+        b.model_copy(update={"current_inflation": 0.045}) if b.name == FED.name else b
+        for b in BANKS
+    )
+    solved = network_nash(banks, spillovers)
+    ordered = tuple(next(b for b in banks if b.name == n) for n in spillovers.names)
+    rates = np.array([solved.rates[n] for n in spillovers.names])
+    assert rates[spillovers.names.index(FED.name)] > rates[spillovers.names.index(RBI.name)]
+
+    for i, bank in enumerate(ordered):
+        def own_loss(rate: float, i: int = i, bank: CentralBank = bank) -> float:
+            trial = rates.copy()
+            trial[i] = rate
+            return _losses_at(ordered, trial, spillovers)[bank.name]
+
+        reply = minimize_scalar(
+            own_loss,
+            bounds=(rates[i] - 0.02, rates[i] + 0.02),
+            method="bounded",
+            options={"xatol": 1e-11},
+        ).x
+        assert reply == pytest.approx(rates[i], abs=1e-6), bank.name
+
+
 # --- the network equilibrium -----------------------------------------------
 
 def test_every_bank_gets_a_rate(spillovers):

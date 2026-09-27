@@ -151,6 +151,23 @@ class CentralBank(BaseModel):
             return abs(inflation - self.inflation_target) < 0.005
         return self.tolerance_lower <= inflation <= self.tolerance_upper
 
+    def external_gap(self, rate: float, other_rates: Sequence[float]) -> float:
+        """The rate differential the external objective penalises.
+
+        Measured against the mean of the other banks' rates. Capital flows
+        respond to a differential against a global rate, not to an average
+        distance from each rate separately, and the mean is the natural
+        reference for an exchange rate channel. It also keeps the loss
+        linear-quadratic, so the network's reaction system is its exact
+        first order condition (ADR 011).
+
+        Zero for a bank without an external objective. Signed, but only
+        its square enters the loss.
+        """
+        if self.external_weight == 0 or not other_rates:
+            return 0.0
+        return rate - float(np.mean(other_rates))
+
     def loss(
         self,
         inflation: float,
@@ -166,6 +183,11 @@ class CentralBank(BaseModel):
         undershooting by one. That is a real assumption. Central banks
         arguably dislike overshoots more, and a loss function capturing
         that would change the equilibrium.
+
+        `external_gap` must come from `external_gap()`, the differential
+        against the mean of the other banks' rates. Any other definition
+        makes this loss disagree with the reaction system the solvers
+        use, and the solved equilibrium stops being one (ADR 011).
 
         Returns a loss, so a payoff is its negative.
         """
@@ -448,13 +470,13 @@ def build_policy_game(
     def home_payoff(profile: tuple[float, ...]) -> float:
         home_rate, foreign_rate = profile
         inflation, output, _, _ = outcomes_for(home_rate, foreign_rate)
-        external = abs(home_rate - foreign_rate) if home.external_weight > 0 else 0.0
+        external = home.external_gap(home_rate, (foreign_rate,))
         return -home.loss(inflation, output, home_rate, external_gap=external)
 
     def foreign_payoff(profile: tuple[float, ...]) -> float:
         home_rate, foreign_rate = profile
         _, _, inflation, output = outcomes_for(home_rate, foreign_rate)
-        external = abs(foreign_rate - home_rate) if foreign.external_weight > 0 else 0.0
+        external = foreign.external_gap(foreign_rate, (home_rate,))
         return -foreign.loss(inflation, output, foreign_rate, external_gap=external)
 
     return Game(
@@ -778,19 +800,18 @@ def _losses_at(
         - spillovers.demand_spillover * home_move
     )
 
-    gap = abs(home_rate - foreign_rate)
     return {
         home.name: home.loss(
             home_inflation,
             home_output,
             home_rate,
-            external_gap=gap if home.external_weight > 0 else 0.0,
+            external_gap=home.external_gap(home_rate, (foreign_rate,)),
         ),
         foreign.name: foreign.loss(
             foreign_inflation,
             foreign_output,
             foreign_rate,
-            external_gap=gap if foreign.external_weight > 0 else 0.0,
+            external_gap=foreign.external_gap(foreign_rate, (home_rate,)),
         ),
     }
 

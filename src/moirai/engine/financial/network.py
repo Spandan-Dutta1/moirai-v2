@@ -571,14 +571,12 @@ def _losses_at(
             if j != i:
                 output -= demand[i, j] * moves[j]
 
-        differential = (
-            float(np.mean([abs(rates[i] - rates[j]) for j in range(n) if j != i]))
-            if bank.external_weight > 0
-            else 0.0
-        )
-
+        others = [float(rates[j]) for j in range(n) if j != i]
         losses[bank.name] = bank.loss(
-            inflation, output, float(rates[i]), external_gap=differential
+            inflation,
+            output,
+            float(rates[i]),
+            external_gap=bank.external_gap(float(rates[i]), others),
         )
     return losses
 

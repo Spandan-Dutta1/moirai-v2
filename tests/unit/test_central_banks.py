@@ -188,6 +188,19 @@ def test_band_membership_is_inclusive_at_the_edges(inflation, inside):
     assert RBI.within_band(inflation) is inside
 
 
+def test_the_external_gap_is_measured_against_the_mean_rate():
+    """Against the mean of the others, not the mean distance to each. A
+    bank between two others sits at zero gap under the first definition
+    and a full point under the second."""
+    assert RBI.external_gap(0.05, (0.04, 0.06)) == pytest.approx(0.0)
+    assert RBI.external_gap(0.06, (0.03, 0.05, 0.04)) == pytest.approx(0.02)
+
+
+def test_the_external_gap_is_zero_without_an_external_objective():
+    assert FED.external_weight == 0
+    assert FED.external_gap(0.06, (0.02, 0.03)) == 0.0
+
+
 # --- the discrete game -----------------------------------------------------
 
 def test_the_game_has_two_players():

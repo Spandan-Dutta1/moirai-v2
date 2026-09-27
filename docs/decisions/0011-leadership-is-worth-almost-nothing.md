@@ -34,18 +34,19 @@ there is nothing for commitment to exploit.
 
 **The same null holds for every other bank.** Each bank was tested as
 leader under the US inflation shock with the literature-anchored matrix.
-Commitment value is measured as the leader's Stackelberg rate minus its
-best reply, under its true loss, to the other banks' simultaneous rates:
+Since the external term was made consistent (below), the difference
+between a leader's Stackelberg rate and its simultaneous rate is its
+commitment value and nothing else:
 
 | leader | external weight | commitment value |
 |---|---|---|
 | Federal Reserve | 0.00 | -0.22bp |
-| European Central Bank | 0.05 | -0.27bp |
+| European Central Bank | 0.05 | -0.34bp |
 | Bank of Japan | 0.15 | -1.02bp |
-| Bank of England | 0.05 | -0.33bp |
-| Reserve Bank of India | 0.40 | +0.06bp |
+| Bank of England | 0.05 | -0.29bp |
+| Reserve Bank of India | 0.40 | -0.01bp |
 
-No leader moves any follower by more than 0.2 basis points. The reason
+No leader moves any follower by more than 0.1 basis points. The reason
 differs down the hierarchy. For the Fed, the followers' replies do not
 feed back. For the RBI, the replies never start: its outward strength is
 the smallest in the matrix, so its moves barely reach anyone, with a
@@ -57,29 +58,79 @@ therefore not borne out by this network. The mirror test was not added,
 because asserting that it matters would be false and asserting that it
 does not was not the question asked.
 
-## A second problem found on the way
+## The external term: gap to the mean rate
 
-A leader's Stackelberg rate should differ from its simultaneous rate
-only by its commitment value. For the RBI under the US inflation shock
-it differs by 9.4 basis points while the commitment value is 0.06. The
-remainder is a pre-existing inconsistency in the simultaneous solver,
+### The problem
+
+The first version of the table above showed the RBI's Stackelberg rate
+9.4 basis points from its simultaneous rate, with a commitment value of
+0.06. The remainder was an inconsistency between the solver and the loss,
 not leadership.
 
-`_reaction_system` in `src/moirai/engine/financial/network.py` treats the
-external term as the squared gap between a bank's rate and the mean of
-the others'. `CentralBank.loss`, evaluated through `_losses_at`, uses the
-squared mean of the absolute gaps. The two agree only when a bank's rate
-lies above or below every other rate. With the Fed at 5.71 percent,
-above the RBI at 5.44 and the others below it, they disagree. The RBI's
-true best reply to the others' simultaneous rates is then 9.35 basis
-points from the rate `network_nash` assigns it. The pairwise consistency
-test cannot catch this, because with two banks the two forms coincide.
+`_reaction_system` in `src/moirai/engine/financial/network.py` treated
+the external term as the squared gap between a bank's rate and the mean
+of the others'. `CentralBank.loss`, evaluated through `_losses_at`, was
+given the mean of the absolute gaps to each other rate. The two agree
+only when a bank's rate lies above or below every other rate. Under the
+US inflation shock the Fed, at 5.71 percent, sits above the RBI at 5.44
+and the other three sit below it. The RBI's true best reply to the
+others' simultaneous rates was 9.35 basis points from the rate
+`network_nash` assigned it. That is the same order as its whole imported
+move. The pairwise consistency test could not see this, because with two
+banks the two definitions coincide.
 
-This affects every bank with an external weight whose rate sits between
-others', and so it affects the RBI's move in `imported_tightening`
-(+12.9 basis points) by an amount of the same order. It is recorded here
-and not fixed, because resolving it means deciding which of the two
-external terms is the intended one, and that is a mechanism decision.
+### Decision
+
+The external gap is the difference between a bank's rate and the mean of
+the other banks' rates. The loss was changed to match the reaction
+system, not the reverse:
+
+- **It is what the RBI's objective is about.** The external weight rests
+  on the RBI's documented concern with capital flows. Capital responds
+  to a differential against a global rate, not to an average distance
+  from five individual rates.
+- **It is the natural reference for an exchange rate channel.** A
+  currency moves against a basket, and the mean is the unweighted form
+  of one.
+- **It keeps the loss linear-quadratic,** so the reaction system is its
+  exact first order condition and the simultaneous solver stays exact
+  rather than needing a numerical fix.
+
+The definition now lives in one place, `CentralBank.external_gap`, and
+the network loss, the pairwise game and the pairwise loss all use it.
+For two banks it gives the same squared gap as before, so every pairwise
+result is unchanged.
+
+### What moved
+
+Nothing in the scenarios. `network_nash` always solved the linear
+system, so its rates were already the mean-gap equilibrium. What was
+wrong was the loss they were judged by, and that now agrees. Every
+scenario reproduces its previous output exactly, including
+`imported_tightening` at +12.9 basis points for the RBI and -0.066
+percent aggregate consumption. The 9.35 basis point figure was the
+distance to a different equilibrium, the one the absolute-gap loss
+implied. It was never an error in the published rates.
+
+What did move is everything computed from the true loss. The Stackelberg
+leader optimises it, so commitment values shifted by at most 0.07 basis
+points, which the table above reflects. The reported losses changed for
+every bank with an external weight.
+
+`test_the_simultaneous_solution_is_a_best_reply_under_the_stated_loss`
+checks, in a network where the RBI sits between the others, that every
+solved rate is a best reply under `_losses_at`. It fails on the old
+definition.
+
+### One nonlinearity remains
+
+The RBI's tolerance band adds a penalty once inflation leaves the two to
+six percent band, and the reaction system does not model it. The loss is
+linear-quadratic only while every bank ends inside its band. In every
+declared scenario every bank does, and the best-reply test above
+confirms the solved rates are exact. A scenario that leaves the RBI
+outside its band at equilibrium would make the simultaneous solver
+approximate again, by an amount that should be measured, not assumed.
 
 ## Decision
 
@@ -90,9 +141,10 @@ keeping.
 
 `test_leadership_is_worth_nothing_to_the_anchor` asserts that leading and
 simultaneous play agree on every rate to within a basis point when the
-Fed leads. The Fed carries no external weight, so that comparison is
-free of the solver inconsistency above. The same comparison for any
-other bank would measure the inconsistency rather than commitment.
+Fed leads.
+
+Measure the external objective as the gap to the mean of the other rates,
+for the reasons above.
 
 ## Consequences
 
@@ -102,7 +154,6 @@ the tiered spillover matrix, whose allocation below the anchor-to-recipient
 cell is not sourced (ADR 008). A matrix with stronger feedback into the
 anchor could make leadership matter; this one does not.
 
-**The simultaneous solver is not the equilibrium of the stated loss** for
-banks with an external weight. Until that is resolved, rates for the ECB,
-Bank of England, Bank of Japan and RBI carry an error of up to about ten
-basis points whenever their rate lies between others'.
+**The simultaneous solver is exact while no bank breaches its band.** A
+scenario that pushes a bank outside its band at equilibrium should check
+its solved rates against the true loss, as the best-reply test does.

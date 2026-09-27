@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,158 tests. Eleven architecture decision records. No external API
+**1,161 tests. Eleven architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -199,11 +199,11 @@ checked against their closed form.
   on judgement.
 - **Two parameters were fitted to their targets** and their agreement is
   construction rather than evidence. Also in ADR 008.
-- **The simultaneous solver is not the equilibrium of the stated loss**
-  for banks with an external weight. It linearises the external term,
-  and the two disagree whenever a bank's rate lies between others'. The
-  RBI's rate can be off by up to about ten basis points, the same order
-  as its imported move. Recorded in ADR 011, not yet resolved.
+- **The simultaneous solver is exact only while every bank ends inside
+  its tolerance band.** The RBI's band penalty is the one nonlinearity
+  the reaction system does not model. No declared scenario breaches it,
+  and a test checks the solved rates are best replies under the true
+  loss. ADR 011.
 - Behavioural rules rather than solved optimisation. Bootstrap bands are
   pointwise, not joint. No credit default, no interbank market.
 
