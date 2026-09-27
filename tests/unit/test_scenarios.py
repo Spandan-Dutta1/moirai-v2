@@ -308,8 +308,20 @@ def test_job_losses_are_counted(population, spillovers):
 
 # --- leadership ------------------------------------------------------------
 
-def test_leadership_changes_the_equilibrium(population, spillovers):
-    """Whether commitment matters is the question the mode exists to ask."""
+def test_leadership_is_worth_nothing_to_the_anchor(population, spillovers):
+    """Moving first pays only if the followers' replies feed back into the
+    leader's own economy. The anchor's inward sensitivity is the smallest
+    in the hierarchy, so for the Fed they barely do, and leading and
+    simultaneous play agree on every rate to within a basis point. See
+    ADR 011.
+
+    The Fed carries no external weight, so the simultaneous solver's
+    linearised external term cannot contaminate this comparison. That is
+    not true of the other banks.
+    """
+    anchor_row = np.asarray(spillovers.demand)[spillovers.names.index(FED.name)]
+    assert anchor_row.max() < np.asarray(spillovers.demand).max()
+
     simultaneous = execute(SIMPLE, population, spillovers)
     led = execute(
         Scenario(
@@ -323,7 +335,10 @@ def test_leadership_changes_the_equilibrium(population, spillovers):
         population,
         spillovers,
     )
-    assert led.equilibrium.rates != simultaneous.equilibrium.rates
+    for bank in BANKS:
+        assert led.equilibrium.rates[bank.name] == pytest.approx(
+            simultaneous.equilibrium.rates[bank.name], abs=0.0001
+        ), bank.name
 
 
 def test_the_leader_is_recorded(population, spillovers):

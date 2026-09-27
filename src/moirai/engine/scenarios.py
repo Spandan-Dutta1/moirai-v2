@@ -520,18 +520,21 @@ IMPORTED_TIGHTENING = Scenario(
     horizon_cap=HORIZON_CAPPED_FOR_INDIA,
 )
 
-FED_LEADS = Scenario(
-    name="fed_leads",
-    description="The same shock, with the Fed moving first",
+COMMITMENT_VALUE = Scenario(
+    name="commitment_value",
+    description="The US shock with the Fed moving first: leadership is worth about nothing",
     conditions=(Condition(bank=FED, inflation=0.045),),
     mode=SolutionMode.LED,
     leader=FED,
     shock_origin=FED,
     rationale=(
-        "Whether commitment changes the answer. Other central banks take "
-        "Federal Reserve policy as given, so leadership is the more "
-        "realistic structure, and the difference from simultaneous play "
-        "measures how much that matters."
+        "A null result that follows from the network's structure. Moving "
+        "first pays only if the followers' responses feed back into the "
+        "leader's own inflation and output. The Fed sits at the top of the "
+        "spillover hierarchy, so almost nothing does, and committing gains "
+        "it nothing it would not get by moving simultaneously. Compare "
+        "with us_inflation_shock: the rates agree to within a basis point. "
+        "See ADR 011."
     ),
 )
 
@@ -575,7 +578,7 @@ GLOBAL_TIGHTENING = Scenario(
 DEFAULT_SCENARIOS: tuple[Scenario, ...] = (
     US_INFLATION_SHOCK,
     IMPORTED_TIGHTENING,
-    FED_LEADS,
+    COMMITMENT_VALUE,
     TWIN_TIGHTENING,
     GLOBAL_TIGHTENING,
 )
