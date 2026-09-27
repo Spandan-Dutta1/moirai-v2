@@ -34,7 +34,9 @@ from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix, netw
 from moirai.engine.scenarios import (
     DEFAULT_SCENARIOS,
     HORIZON_CAPPED_FOR_INDIA,
+    IMPORTED_TIGHTENING,
     INFLATION_HELD_FOR_INDIA,
+    TWIN_TIGHTENING,
     Condition,
     HeldChannel,
     HorizonCap,
@@ -392,7 +394,7 @@ def test_the_serialised_result_records_the_conditions(population, spillovers):
 def test_comparison_covers_every_scenario(population, spillovers):
     results = tuple(
         execute(s, population, spillovers)
-        for s in (SIMPLE, DEFAULT_SCENARIOS[2])
+        for s in (SIMPLE, TWIN_TIGHTENING)
     )
     summary = compare(results)
     assert summary["n_scenarios"] == 2
@@ -402,7 +404,7 @@ def test_comparison_covers_every_scenario(population, spillovers):
 def test_comparison_names_the_widest_spread(population, spillovers):
     results = tuple(
         execute(s, population, spillovers)
-        for s in (SIMPLE, DEFAULT_SCENARIOS[2])
+        for s in (SIMPLE, TWIN_TIGHTENING)
     )
     summary = compare(results)
     assert summary["widest_spread"] in summary["by_scenario"]
@@ -436,6 +438,32 @@ def test_the_twin_scenario_originates_from_the_rbi():
     transmits differently from an imported one."""
     twin = next(s for s in DEFAULT_SCENARIOS if s.name == "twin_tightening")
     assert twin.shock_origin == RBI.name
+
+def test_the_imported_scenario_conditions_only_the_fed():
+    """Its point is a shock India did not cause. A condition on the RBI
+    would make part of the move domestic."""
+    assert IMPORTED_TIGHTENING.shock_origin == RBI.name
+    assert {c.bank for c in IMPORTED_TIGHTENING.conditions} == {FED.name}
+
+
+def test_the_imported_shock_is_the_rbis_response_to_the_fed(population, spillovers):
+    """The RBI's move is measured against the game without the Fed's
+    condition, so it is exactly what the Fed's inflation causes at the RBI,
+    and it is a tightening."""
+    result = execute(IMPORTED_TIGHTENING, population, spillovers)
+    unconditioned = network_nash(BANKS, spillovers).rates[RBI.name]
+    assert result.shock.bank == RBI.name
+    assert result.shock.reference_rate == pytest.approx(unconditioned)
+    assert result.shock.deviation > 0
+
+
+def test_the_imported_shock_is_smaller_than_its_source(population, spillovers):
+    """Spillovers attenuate. An imported move at least as large as the
+    Fed's own would mean the network amplifies, which no tier allows."""
+    imported = execute(IMPORTED_TIGHTENING, population, spillovers)
+    source = execute(SIMPLE, population, spillovers)
+    assert 0 < imported.shock.deviation < source.shock.deviation
+
 
 def test_every_rbi_origin_scenario_declares_the_proxy_limits():
     """An RBI-origin path is carried by the US impulse response, whose

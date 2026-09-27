@@ -91,6 +91,17 @@ both. The shared declarations are `INFLATION_HELD_FOR_INDIA` and
 `HORIZON_CAPPED_FOR_INDIA`. A test requires every declared RBI-origin
 scenario to carry both.
 
+`imported_tightening` is the headline Indian-origin scenario, reported
+alongside `us_inflation_shock`. It conditions only the Fed, at 4.5 percent
+inflation, so the RBI's move against the unconditioned game is wholly
+imported: +12.9 basis points, 0.3 standard deviations of the US shock.
+Indian households lose 0.066 percent of consumption in aggregate and
+floating-rate borrowers 0.59 percent, against 0.45 and 2.94 percent when
+the Fed's own path is delivered. That is the honest size of an imported
+shock. It is small because the spillover is small, not because of the
+restrictions this ADR imposes: holding inflation and capping the horizon
+change the aggregate by less than 0.003 percentage points.
+
 ### Related changes made at the same time
 
 These define the magnitude of an RBI-origin shock, so they are recorded
@@ -133,7 +144,7 @@ A bank without a value cannot originate a household path.
 **What holding inflation costs.** In the model, inflation erodes real
 wealth and real debt. Measured on the RBI-origin runs:
 
-| outcome | us_inflation_shock at the RBI, free / held | twin_tightening, free / held |
+| outcome | imported_tightening, free / held | twin_tightening, free / held |
 |---|---|---|
 | aggregate consumption | -0.066% / -0.067% | -0.575% / -0.588% |
 | floating-rate borrowers | -0.539% / -0.571% | -3.290% / -3.458% |

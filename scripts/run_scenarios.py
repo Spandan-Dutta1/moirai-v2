@@ -1,4 +1,4 @@
-"""Four named scenarios through the full chain."""
+"""Five named scenarios through the full chain."""
 
 import warnings
 

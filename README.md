@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,152 tests. Ten architecture decision records. No external API
+**1,158 tests. Ten architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -16,27 +16,40 @@ dependency in the engine.**
 
 A monetary tightening looks almost neutral in aggregate and is not.
 
-| | consumption change |
-|---|---|
-| floating-rate borrowers | **-2.94%** |
-| fixed-rate borrowers | -0.51% |
-| net savers | -0.18% |
-| **aggregate** | **-0.45%** |
+| consumption change | US shock, US rate | imported into India |
+|---|---|---|
+| floating-rate borrowers | **-2.94%** | **-0.59%** |
+| fixed-rate borrowers | -0.51% | -0.12% |
+| net savers | -0.18% | -0.03% |
+| **aggregate** | **-0.45%** | **-0.07%** |
+| policy move | Fed +88bp | RBI +13bp |
 
-The `us_inflation_shock` scenario: the part of the Fed's move caused by
-US inflation at 4.5 percent, measured against the same game without that
-condition (ADR 010). The rate path is American, delivered to households
-calibrated to India.
+Both columns are the same event: US inflation at 4.5 percent. Each move
+is measured against the same game without that condition (ADR 010).
+
+`us_inflation_shock` delivers the Fed's own rate path to households
+calibrated to India. `imported_tightening` is the chain the project
+exists to trace: the Fed tightens, the spillover reaches India, the RBI
+responds, Indian banks reprice and Indian households bear it. Its size is
+the RBI's own move. Its shape is still the US transmission, because the
+Indian VAR is not credibly identified (ADR 007). Inflation is held at
+baseline because the US response has the wrong sign for India, and the
+simulation stops at 30 months because US persistence exceeds Indian
+estimates (ADR 010).
+
+The imported shock is a seventh the size of the US one: the honest size
+of what reaches Indian households when only the Fed has a reason to move.
 
 A representative-household model reports the aggregate and concludes
-monetary policy barely moves consumption. The near three-point spread is the
-finding, and it is invisible without heterogeneity. It is also the
-intuition that heterogeneous-agent models formalise: policy works largely
-through income and redistribution rather than intertemporal substitution.
+monetary policy barely moves consumption. The spread between borrowers
+and savers is the finding in both columns, and it is invisible without
+heterogeneity. It is also the intuition that heterogeneous-agent models
+formalise: policy works largely through income and redistribution rather
+than intertemporal substitution.
 
 ```bash
 python scripts/run_pipeline.py     # the chain, end to end
-python scripts/run_scenarios.py    # four named scenarios compared
+python scripts/run_scenarios.py    # five named scenarios compared
 ```
 
 ---

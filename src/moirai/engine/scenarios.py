@@ -493,6 +493,33 @@ US_INFLATION_SHOCK = Scenario(
     ),
 )
 
+IMPORTED_TIGHTENING = Scenario(
+    name="imported_tightening",
+    description=(
+        "US inflation reaches 4.5 percent; Indian households bear the RBI's "
+        "response to it"
+    ),
+    conditions=(
+        Condition(
+            bank=FED,
+            inflation=0.045,
+            note="the same US shock as us_inflation_shock; India is left unchanged",
+        ),
+    ),
+    shock_origin=RBI,
+    rationale=(
+        "The chain the project exists to trace: the Fed tightens, the "
+        "spillover reaches India, the RBI responds, Indian banks reprice and "
+        "Indian households bear it. Only the Fed is conditioned, and the "
+        "shock is measured against the game without that condition, so the "
+        "RBI's move is wholly imported. Its size is the RBI's; its shape is "
+        "the US transmission with inflation held and the horizon capped, "
+        "because the Indian VAR is not credibly identified (ADRs 007, 010)."
+    ),
+    held_channels=(INFLATION_HELD_FOR_INDIA,),
+    horizon_cap=HORIZON_CAPPED_FOR_INDIA,
+)
+
 FED_LEADS = Scenario(
     name="fed_leads",
     description="The same shock, with the Fed moving first",
@@ -547,6 +574,7 @@ GLOBAL_TIGHTENING = Scenario(
 
 DEFAULT_SCENARIOS: tuple[Scenario, ...] = (
     US_INFLATION_SHOCK,
+    IMPORTED_TIGHTENING,
     FED_LEADS,
     TWIN_TIGHTENING,
     GLOBAL_TIGHTENING,
