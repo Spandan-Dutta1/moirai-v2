@@ -25,7 +25,7 @@ A monetary tightening looks almost neutral in aggregate and is not.
 
 The `us_inflation_shock` scenario: the part of the Fed's move caused by
 US inflation at 4.5 percent, measured against the same game without that
-condition (ADR 012). The rate path is American, delivered to households
+condition (ADR 010). The rate path is American, delivered to households
 calibrated to India.
 
 A representative-household model reports the aggregate and concludes
@@ -176,11 +176,11 @@ checked against their closed form.
   estimates are conservative.
 - **The Indian VAR is not credibly identified.** Output rises after a rate
   hike across six specifications, which is the RBI tightening into
-  expected strength. Documented in ADRs 007 and 012; the result is withheld.
+  expected strength. Documented in ADRs 007 and 010; the result is withheld.
 - **Indian-origin scenarios borrow the US transmission.** Its inflation
   response has the wrong sign for India and its persistence exceeds Indian
   estimates, so those scenarios hold inflation at baseline and stop at 30
-  months. Fixed-rate borrowers' results depend on that choice. ADR 012.
+  months. Fixed-rate borrowers' results depend on that choice. ADR 010.
 - **Roughly 15 sourced parameters against 35-40 assumed ones**, audited in
   ADR 008. Layers 0 and 1 rest on data; layers 2 and 3 rest substantially
   on judgement.

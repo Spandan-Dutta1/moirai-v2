@@ -98,7 +98,7 @@ for scenario in DEFAULT_SCENARIOS:
     if scenario.horizon_cap is not None:
         print(f"  horizon capped at {scenario.horizon_cap.periods} months")
     if scenario.held_channels or scenario.horizon_cap is not None:
-        print("  (reasons recorded on the scenario; see ADR 012)")
+        print("  (reasons recorded on the scenario; see ADR 010)")
     print(f"  banks pass {result.lending_rate_change_bp:+.0f}bp to borrowers, "
           f"{result.deposit_rate_change_bp:+.0f}bp to savers "
           f"(wedge {result.bank_wedge_bp:.0f}bp)")

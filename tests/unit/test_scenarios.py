@@ -441,7 +441,7 @@ def test_every_rbi_origin_scenario_declares_the_proxy_limits():
     """An RBI-origin path is carried by the US impulse response, whose
     inflation sign and persistence the Indian evidence contradicts. A
     declared scenario that used it without saying so would be silent
-    about both. See ADR 012."""
+    about both. See ADR 010."""
     for scenario in DEFAULT_SCENARIOS:
         if scenario.shock_origin != RBI.name:
             continue

@@ -443,7 +443,7 @@ FED = "Federal Reserve"
 RBI = "Reserve Bank of India"
 ECB = "European Central Bank"
 
-# ---- the US transmission delivered to Indian households (ADR 012) --------
+# ---- the US transmission delivered to Indian households (ADR 010) --------
 #
 # The Indian VAR is not credibly identified (ADR 007), so an RBI-origin
 # path is the RBI's move carried by the US impulse response. Output timing
@@ -459,7 +459,7 @@ INFLATION_HELD_FOR_INDIA = HeldChannel(
         "Khundrakpam and Jain (2012) and Kapur and Behera (2012) find Indian "
         "inflation falling after three to five quarters. Holding inflation at "
         "baseline asserts no price response rather than the contradicted one. "
-        "See ADR 012."
+        "See ADR 010."
     ),
 )
 
@@ -470,7 +470,7 @@ HORIZON_CAPPED_FOR_INDIA = HorizonCap(
         "response has not halved from its month 10 peak by month 60, while "
         "published Indian estimates put the effects at eight to ten quarters. "
         "Beyond 30 months the path is US persistence without Indian support. "
-        "See ADR 012."
+        "See ADR 010."
     ),
 )
 
