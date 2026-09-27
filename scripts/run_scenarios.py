@@ -78,15 +78,27 @@ for scenario in DEFAULT_SCENARIOS:
     )
     results.append(result)
 
-    print(f"  {'bank':<24} {'rate':>9} {'move':>9}")
+    print(f"  {'bank':<24} {'rate':>9} {'move':>9} {'unprompted':>11} {'caused':>9}")
     banks_by_name = {b.name: b for b in scenario.apply_to(banks)}
     for name, rate in result.equilibrium.rates.items():
-        move = (rate - banks_by_name[name].current_rate) * 10_000
-        print(f"  {name:<24} {rate:>8.3%} {move:>+8.0f}bp")
+        current = banks_by_name[name].current_rate
+        reference = result.reference_equilibrium.rates[name]
+        print(
+            f"  {name:<24} {rate:>8.3%} {(rate - current) * 10_000:>+8.0f}bp "
+            f"{(reference - current) * 10_000:>+10.0f}bp "
+            f"{(rate - reference) * 10_000:>+8.0f}bp"
+        )
+    print("  unprompted: the move with no conditions; caused: the rest, which is the shock")
 
     print()
     print(f"  shock: {result.shock.scale:.1f} standard deviations from "
           f"{result.scenario.shock_origin}")
+    for channel in scenario.held_channels:
+        print(f"  held at baseline: {channel.variable.value}")
+    if scenario.horizon_cap is not None:
+        print(f"  horizon capped at {scenario.horizon_cap.periods} months")
+    if scenario.held_channels or scenario.horizon_cap is not None:
+        print("  (reasons recorded on the scenario; see ADR 012)")
     print(f"  banks pass {result.lending_rate_change_bp:+.0f}bp to borrowers, "
           f"{result.deposit_rate_change_bp:+.0f}bp to savers "
           f"(wedge {result.bank_wedge_bp:.0f}bp)")

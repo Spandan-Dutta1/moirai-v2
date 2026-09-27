@@ -85,6 +85,30 @@ class Condition(BaseModel):
         return bank.model_copy(update=updates) if updates else bank
 
 
+class HeldChannel(BaseModel):
+    """A macro variable pinned at its baseline, and why.
+
+    The estimated transmission is shared by every scenario, but it need
+    not be credible for every economy a scenario delivers it to. Holding a
+    channel is the declared alternative to passing through a response the
+    evidence for that economy contradicts.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    variable: MacroVariable
+    reason: str = Field(min_length=1)
+
+
+class HorizonCap(BaseModel):
+    """A limit on how many periods households are simulated, and why."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    periods: int = Field(ge=1)
+    reason: str = Field(min_length=1)
+
+
 class Scenario(BaseModel):
     """A named set of conditions and how to solve under them."""
 
@@ -104,6 +128,14 @@ class Scenario(BaseModel):
         default="",
         description="Why these conditions are worth asking about.",
     )
+    held_channels: tuple[HeldChannel, ...] = Field(
+        default=(),
+        description="Macro variables pinned at baseline on the household path.",
+    )
+    horizon_cap: HorizonCap | None = Field(
+        default=None,
+        description="Shorter simulation horizon than the impulse response offers.",
+    )
 
     @model_validator(mode="after")
     def _leader_matches_mode(self) -> Scenario:
@@ -111,6 +143,17 @@ class Scenario(BaseModel):
             raise ValueError(f"{self.name}: LED mode needs a leader")
         if self.mode is SolutionMode.SIMULTANEOUS and self.leader:
             raise ValueError(f"{self.name}: a leader is meaningless when simultaneous")
+        return self
+
+    @model_validator(mode="after")
+    def _held_channels_leave_a_shock(self) -> Scenario:
+        held = [c.variable for c in self.held_channels]
+        if len(set(held)) != len(held):
+            raise ValueError(f"{self.name}: a channel is held twice")
+        if MacroVariable.POLICY_RATE in held:
+            raise ValueError(
+                f"{self.name}: holding the policy rate removes the shock itself"
+            )
         return self
 
     def apply_to(self, banks: tuple[CentralBank, ...]) -> tuple[CentralBank, ...]:
@@ -133,6 +176,15 @@ class Scenario(BaseModel):
             "leader": self.leader,
             "shock_origin": self.shock_origin,
             "rationale": self.rationale,
+            "held_channels": [
+                {"variable": c.variable.value, "reason": c.reason}
+                for c in self.held_channels
+            ],
+            "horizon_cap": (
+                None
+                if self.horizon_cap is None
+                else {"periods": self.horizon_cap.periods, "reason": self.horizon_cap.reason}
+            ),
             "conditions": [
                 {
                     "bank": c.bank,
@@ -152,6 +204,9 @@ class ScenarioResult(BaseModel):
 
     scenario: Scenario
     equilibrium: NetworkEquilibrium
+    reference_equilibrium: NetworkEquilibrium = Field(
+        description="The same game without the scenario's conditions."
+    )
     shock: PolicyShock
     path: ShockPath
 
@@ -183,6 +238,7 @@ class ScenarioResult(BaseModel):
         return {
             "scenario": self.scenario.to_ledger_dict(),
             "equilibrium": self.equilibrium.to_ledger_dict(),
+            "reference_equilibrium": self.reference_equilibrium.to_ledger_dict(),
             "shock": self.shock.to_ledger_dict(),
             "outcome": {
                 "aggregate_consumption_change": round(
@@ -219,7 +275,6 @@ def run_scenario(
     diagnostics: DiagnosticReport,
     behaviour: BehaviourParameters | None = None,
     calibration_loss: float = 0.0,
-    baseline_income_growth: float = 0.02,
     allow_extreme: bool = False,
 ) -> ScenarioResult:
     """Run one scenario through the full chain.
@@ -227,6 +282,14 @@ def run_scenario(
     The macro estimation is passed in rather than performed here. Every
     scenario shares the same estimated transmission, and refitting per
     scenario would both be slow and obscure that they do.
+
+    The shock is a counterfactual difference. The game is solved twice,
+    with and without the scenario's conditions, in the same mode, and the
+    origin bank's move is the gap between the two. Measuring from the
+    bank's current rate instead would count the move it makes with no
+    conditions at all: in the default network the RBI goes from 5.25 to
+    5.31 percent unprompted, which is a third of its response to a US
+    inflation shock and none of it imported.
     """
     behaviour = behaviour or BehaviourParameters()
 
@@ -239,14 +302,11 @@ def run_scenario(
             f"bank in this network"
         )
 
-    # ---- they choose rates ----
-    if scenario.mode is SolutionMode.SIMULTANEOUS:
-        equilibrium = network_nash(conditioned, spillovers)
-    else:
-        assert scenario.leader is not None
-        equilibrium = network_stackelberg(conditioned, spillovers, scenario.leader)
+    # ---- they choose rates, with and without the conditions ----
+    equilibrium = _solve(scenario, conditioned, spillovers)
+    reference = _solve(scenario, banks, spillovers)
 
-    # ---- the chosen rate becomes a shock ----
+    # ---- the difference the conditions make becomes a shock ----
     origin = by_name[scenario.shock_origin]
     solution = _as_analytic(equilibrium)
 
@@ -256,17 +316,18 @@ def run_scenario(
         responses,
         shock_name,
         rate_variable,
-        mappings_for_bank(
-            origin,
-            rate_variable,
-            price_variable,
-            output_variable,
-            baseline_income_growth=baseline_income_growth,
-        ),
+        mappings_for_bank(origin, rate_variable, price_variable, output_variable),
         diagnostics=diagnostics,
         require_usable=True,
         allow_extreme=allow_extreme,
+        reference_rate=reference.rates[scenario.shock_origin],
     )
+
+    # ---- declared departures from the estimated transmission ----
+    for channel in scenario.held_channels:
+        path = path.hold(channel.variable)
+    if scenario.horizon_cap is not None:
+        path = path.truncate(scenario.horizon_cap.periods)
 
     # ---- households bear it ----
     baseline, shocked = counterfactual(population, path, behaviour, banking_system)
@@ -284,6 +345,7 @@ def run_scenario(
     result = ScenarioResult(
         scenario=scenario,
         equilibrium=equilibrium,
+        reference_equilibrium=reference,
         shock=shock,
         path=path,
         aggregate_consumption_change=float(shock_total.sum() / base_total.sum() - 1.0),
@@ -312,6 +374,16 @@ def run_scenario(
         spread=round(result.spread * 100, 4),
     )
     return result
+
+
+def _solve(
+    scenario: Scenario, banks: tuple[CentralBank, ...], spillovers: SpilloverMatrix
+) -> NetworkEquilibrium:
+    """Solve the network in the scenario's mode."""
+    if scenario.mode is SolutionMode.SIMULTANEOUS:
+        return network_nash(banks, spillovers)
+    assert scenario.leader is not None
+    return network_stackelberg(banks, spillovers, scenario.leader)
 
 
 def _as_analytic(equilibrium: NetworkEquilibrium):
@@ -371,6 +443,37 @@ FED = "Federal Reserve"
 RBI = "Reserve Bank of India"
 ECB = "European Central Bank"
 
+# ---- the US transmission delivered to Indian households (ADR 012) --------
+#
+# The Indian VAR is not credibly identified (ADR 007), so an RBI-origin
+# path is the RBI's move carried by the US impulse response. Output timing
+# roughly matches published Indian estimates. Inflation and persistence do
+# not, and these two declarations say so wherever the proxy is used.
+
+INFLATION_HELD_FOR_INDIA = HeldChannel(
+    variable=MacroVariable.INFLATION,
+    reason=(
+        "The US impulse response has the wrong sign for India. After a "
+        "tightening, US inflation rises for four months and the price level "
+        "is still 0.14 percent higher at 36 months. Mohanty (2012), "
+        "Khundrakpam and Jain (2012) and Kapur and Behera (2012) find Indian "
+        "inflation falling after three to five quarters. Holding inflation at "
+        "baseline asserts no price response rather than the contradicted one. "
+        "See ADR 012."
+    ),
+)
+
+HORIZON_CAPPED_FOR_INDIA = HorizonCap(
+    periods=30,
+    reason=(
+        "US persistence exceeds Indian estimates. The US cumulative rate "
+        "response has not halved from its month 10 peak by month 60, while "
+        "published Indian estimates put the effects at eight to ten quarters. "
+        "Beyond 30 months the path is US persistence without Indian support. "
+        "See ADR 012."
+    ),
+)
+
 
 US_INFLATION_SHOCK = Scenario(
     name="us_inflation_shock",
@@ -422,6 +525,8 @@ TWIN_TIGHTENING = Scenario(
         "at the same time. Its band breach adds an accountability cost the "
         "other banks do not carry."
     ),
+    held_channels=(INFLATION_HELD_FOR_INDIA,),
+    horizon_cap=HORIZON_CAPPED_FOR_INDIA,
 )
 
 GLOBAL_TIGHTENING = Scenario(

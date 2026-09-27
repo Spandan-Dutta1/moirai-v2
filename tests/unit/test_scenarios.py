@@ -21,6 +21,7 @@ from moirai.engine.causal.diagnostics import (
 )
 from moirai.engine.causal.irf import ImpulseResponse
 from moirai.engine.economy.households import PopulationParameters, generate_population
+from moirai.engine.economy.shock_path import MacroVariable
 from moirai.engine.financial.central_banks import (
     BANK_OF_ENGLAND,
     BANK_OF_JAPAN,
@@ -29,10 +30,14 @@ from moirai.engine.financial.central_banks import (
     RBI,
 )
 from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
-from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix
+from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix, network_nash
 from moirai.engine.scenarios import (
     DEFAULT_SCENARIOS,
+    HORIZON_CAPPED_FOR_INDIA,
+    INFLATION_HELD_FOR_INDIA,
     Condition,
+    HeldChannel,
+    HorizonCap,
     Scenario,
     SolutionMode,
     compare,
@@ -431,6 +436,155 @@ def test_the_twin_scenario_originates_from_the_rbi():
     transmits differently from an imported one."""
     twin = next(s for s in DEFAULT_SCENARIOS if s.name == "twin_tightening")
     assert twin.shock_origin == RBI.name
+
+def test_every_rbi_origin_scenario_declares_the_proxy_limits():
+    """An RBI-origin path is carried by the US impulse response, whose
+    inflation sign and persistence the Indian evidence contradicts. A
+    declared scenario that used it without saying so would be silent
+    about both. See ADR 012."""
+    for scenario in DEFAULT_SCENARIOS:
+        if scenario.shock_origin != RBI.name:
+            continue
+        assert INFLATION_HELD_FOR_INDIA in scenario.held_channels, scenario.name
+        assert scenario.horizon_cap == HORIZON_CAPPED_FOR_INDIA, scenario.name
+
+
+# --- the shock is a counterfactual difference ------------------------------
+
+def test_the_shock_is_measured_against_the_unconditioned_game(population, spillovers):
+    """Not against the current rate, which would count the move the bank
+    makes with no conditions applied at all."""
+    result = execute(SIMPLE, population, spillovers)
+    unconditioned = network_nash(BANKS, spillovers).rates[FED.name]
+    assert result.shock.reference_rate == pytest.approx(unconditioned)
+    assert result.shock.deviation == pytest.approx(
+        result.equilibrium.rates[FED.name] - unconditioned
+    )
+
+
+def test_the_unconditioned_game_already_moves_the_bank(spillovers):
+    """The premise of the counterfactual. If the no-condition equilibrium
+    sat at the current rate, measuring from either would be the same."""
+    unconditioned = network_nash(BANKS, spillovers).rates[FED.name]
+    assert unconditioned != pytest.approx(FED.current_rate)
+
+
+def test_a_scenario_without_conditions_has_no_shock(population, spillovers):
+    quiet = Scenario(name="quiet", description="x", shock_origin=FED.name)
+    result = execute(quiet, population, spillovers)
+    assert result.shock.deviation == pytest.approx(0.0)
+    assert result.aggregate_consumption_change == pytest.approx(0.0)
+
+
+def test_the_reference_game_uses_the_scenario_mode(population, spillovers):
+    """A led scenario compared against a simultaneous baseline would
+    measure leadership as well as the conditions."""
+    led = Scenario(
+        name="led",
+        description="x",
+        conditions=(Condition(bank=FED.name, inflation=0.045),),
+        mode=SolutionMode.LED,
+        leader=FED.name,
+        shock_origin=FED.name,
+    )
+    result = execute(led, population, spillovers)
+    assert result.reference_equilibrium.leader == FED.name
+
+
+def test_the_reference_equilibrium_is_recorded(population, spillovers):
+    payload = execute(SIMPLE, population, spillovers).to_ledger_dict()
+    assert "reference_equilibrium" in payload
+    assert "reference_rate" in payload["shock"]
+
+
+# --- baselines come from the origin bank -----------------------------------
+
+def test_income_growth_baseline_comes_from_the_origin_bank(population, spillovers):
+    twin = next(s for s in DEFAULT_SCENARIOS if s.name == "twin_tightening")
+    result = execute(twin, population, spillovers)
+    assert result.path.baselines[MacroVariable.INCOME_GROWTH] == RBI.current_income_growth
+    assert result.path.baselines[MacroVariable.POLICY_RATE] == RBI.current_rate
+
+
+def test_a_bank_without_income_growth_cannot_originate(population, spillovers):
+    """Refusing is better than a default that belongs to another economy."""
+    assert ECB.current_income_growth is None
+    scenario = Scenario(
+        name="ecb",
+        description="x",
+        conditions=(Condition(bank=ECB.name, inflation=0.04),),
+        shock_origin=ECB.name,
+    )
+    with pytest.raises(EngineError, match="current_income_growth"):
+        execute(scenario, population, spillovers)
+
+
+# --- declared departures from the estimated transmission -------------------
+
+def test_a_held_channel_sits_at_baseline(population, spillovers):
+    held = SIMPLE.model_copy(
+        update={"held_channels": (HeldChannel(variable=MacroVariable.INFLATION, reason="x"),)}
+    )
+    path = execute(held, population, spillovers).path
+    assert np.all(path.deviation(MacroVariable.INFLATION) == 0.0)
+    assert np.any(path.deviation(MacroVariable.POLICY_RATE) != 0.0)
+
+
+def test_holding_inflation_changes_the_outcome(population, spillovers):
+    """The channel is live, so holding it is a real assumption."""
+    held = SIMPLE.model_copy(
+        update={"held_channels": (HeldChannel(variable=MacroVariable.INFLATION, reason="x"),)}
+    )
+    assert (
+        execute(held, population, spillovers).aggregate_consumption_change
+        != execute(SIMPLE, population, spillovers).aggregate_consumption_change
+    )
+
+
+def test_the_horizon_cap_shortens_the_simulation(population, spillovers):
+    capped = SIMPLE.model_copy(update={"horizon_cap": HorizonCap(periods=12, reason="x")})
+    result = execute(capped, population, spillovers)
+    assert result.path.horizon == 12
+    assert len(result.path) == 13
+
+
+def test_a_cap_beyond_the_response_horizon_changes_nothing(population, spillovers):
+    capped = SIMPLE.model_copy(update={"horizon_cap": HorizonCap(periods=100, reason="x")})
+    assert execute(capped, population, spillovers).path.horizon == make_irf().horizon
+
+
+def test_holding_the_policy_rate_is_rejected():
+    with pytest.raises(Exception, match="removes the shock"):
+        Scenario(
+            name="x",
+            description="x",
+            shock_origin=FED.name,
+            held_channels=(HeldChannel(variable=MacroVariable.POLICY_RATE, reason="x"),),
+        )
+
+
+def test_a_channel_cannot_be_held_twice():
+    channel = HeldChannel(variable=MacroVariable.INFLATION, reason="x")
+    with pytest.raises(Exception, match="held twice"):
+        Scenario(
+            name="x", description="x", shock_origin=FED.name, held_channels=(channel, channel)
+        )
+
+
+def test_a_departure_needs_a_reason():
+    with pytest.raises(Exception):
+        HeldChannel(variable=MacroVariable.INFLATION, reason="")
+    with pytest.raises(Exception):
+        HorizonCap(periods=30, reason="")
+
+
+def test_the_departures_are_recorded_in_the_ledger():
+    twin = next(s for s in DEFAULT_SCENARIOS if s.name == "twin_tightening")
+    payload = twin.to_ledger_dict()
+    assert payload["held_channels"][0]["variable"] == "inflation"
+    assert "wrong sign" in payload["held_channels"][0]["reason"]
+    assert payload["horizon_cap"]["periods"] == 30
+
 
 def test_an_implausible_shock_is_refused(population, spillovers):
     """The guard catches a linear extrapolation past anything sensible.

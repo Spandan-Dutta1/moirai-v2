@@ -114,6 +114,14 @@ class CentralBank(BaseModel):
     current_rate: float = Field(default=0.0, description="Policy rate as a decimal.")
     current_inflation: float = Field(default=0.0)
     current_output_gap: float = Field(default=0.0)
+    current_income_growth: float | None = Field(
+        default=None,
+        description=(
+            "Annual household income growth the economy sits at before a "
+            "shock, as a decimal. Needed only when this bank originates the "
+            "household-facing path; None refuses rather than guessing."
+        ),
+    )
 
     @model_validator(mode="after")
     def _band_is_ordered_around_the_target(self) -> CentralBank:
@@ -237,6 +245,8 @@ FED = CentralBank(
     ),
     current_rate=0.0425,
     current_inflation=0.030,
+    # Unsourced. Carried over from the scenario runner's former default.
+    current_income_growth=0.02,
 )
 
 ECB = CentralBank(
@@ -324,6 +334,8 @@ RBI = CentralBank(
     ),
     current_rate=0.0525,
     current_inflation=0.044,
+    # Unsourced. Carried over from the baseline in run_pipeline_india.py.
+    current_income_growth=0.065,
 )
 
 MAJOR_CENTRAL_BANKS: tuple[CentralBank, ...] = (

@@ -64,7 +64,6 @@ path, shock = path_from_game(
         "fedfunds",
         "cpiaucsl",
         "indpro",
-        baseline_income_growth=0.02,
     ))
 
 print("SEAM  game rate into shock scale")

@@ -193,6 +193,32 @@ class ShockPath(BaseModel):
             update={"paths": rescaled, "scale_factor": self.scale_factor * factor}
         )
 
+    def hold(self, variable: MacroVariable) -> ShockPath:
+        """Pin one variable at its baseline, removing its channel.
+
+        For when the estimated response of that variable is not credible
+        for the economy the households live in. Holding it asserts no
+        response, which is weaker than asserting the wrong one, but it is
+        still an assumption and the caller should record why.
+        """
+        path = self.get(variable)
+        held = {**self.paths, variable: np.full_like(path, self.baselines[variable])}
+        return self.model_copy(update={"paths": held})
+
+    def truncate(self, horizon: int) -> ShockPath:
+        """Keep periods 0..horizon and drop the rest.
+
+        Households are simulated for as many periods as the path has, so
+        this ends the simulation early rather than returning the economy
+        to baseline. A horizon at or beyond the current one is a no-op.
+        """
+        if horizon < 0:
+            raise EngineError(f"horizon must be non-negative, got {horizon}")
+        if horizon >= self.horizon:
+            return self
+        cut = {variable: path[: horizon + 1].copy() for variable, path in self.paths.items()}
+        return self.model_copy(update={"paths": cut, "horizon": horizon})
+
     def to_ledger_dict(self) -> dict[str, Any]:
         return {
             "shock_name": self.shock_name,

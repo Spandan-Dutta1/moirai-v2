@@ -56,7 +56,15 @@ class PolicyShock(BaseModel):
 
     bank: str
     equilibrium_rate: float
-    current_rate: float
+    current_rate: float = Field(description="Where the bank's rate sits; the path starts here.")
+    reference_rate: float = Field(
+        description=(
+            "What the move is measured against. In a scenario this is the "
+            "bank's rate in the same game solved without the scenario's "
+            "conditions, so the shock excludes the move the bank would make "
+            "anyway."
+        )
+    )
     impact_response: float = Field(
         description="One standard deviation move in the policy rate, on impact."
     )
@@ -67,7 +75,7 @@ class PolicyShock(BaseModel):
 
     @property
     def deviation(self) -> float:
-        return self.equilibrium_rate - self.current_rate
+        return self.equilibrium_rate - self.reference_rate
 
     @property
     def deviation_bp(self) -> float:
@@ -78,6 +86,7 @@ class PolicyShock(BaseModel):
             "bank": self.bank,
             "concept": self.concept,
             "current_rate": round(self.current_rate, 6),
+            "reference_rate": round(self.reference_rate, 6),
             "equilibrium_rate": round(self.equilibrium_rate, 6),
             "deviation_bp": round(self.deviation_bp, 1),
             "impact_response": round(self.impact_response, 6),
@@ -93,6 +102,8 @@ def shock_from_equilibrium(
     responses: ImpulseResponse,
     shock_name: str,
     rate_variable: str,
+    *,
+    reference_rate: float | None = None,
 ) -> PolicyShock:
     """Convert a game equilibrium into an impulse response scale factor.
 
@@ -101,11 +112,18 @@ def shock_from_equilibrium(
     solution
         The game outcome, holding each bank's equilibrium rate.
     bank
-        Whose move drives the shock. Its `current_rate` is the baseline.
+        Whose move drives the shock.
     responses
         The estimated impulse responses, in the VAR's own units.
     rate_variable
         Which VAR variable is the policy rate.
+    reference_rate
+        What the move is measured against. Omitted, it is the bank's
+        `current_rate`, which counts every step toward the game's
+        equilibrium as shock, including the step the bank would take with
+        no conditions applied at all. A scenario passes the rate from the
+        game solved without its conditions, so the shock is only the part
+        the conditions cause.
 
     Raises
     ------
@@ -119,7 +137,8 @@ def shock_from_equilibrium(
         )
 
     equilibrium = solution.rates[bank.name]
-    deviation = equilibrium - bank.current_rate
+    reference = bank.current_rate if reference_rate is None else reference_rate
+    deviation = equilibrium - reference
 
     # The impact response is in the VAR's units. A differenced percent
     # series gives percentage points, so it converts to a decimal here.
@@ -146,8 +165,13 @@ def shock_from_equilibrium(
     scale = deviation / impact
     is_extreme = abs(scale) > EXTREME_SCALE
 
+    measured_from = (
+        f"from {reference:.2%}"
+        if reference_rate is None
+        else f"against {reference:.2%} without the conditions"
+    )
     note = (
-        f"{bank.name} moves {deviation * 10_000:+.0f}bp from {bank.current_rate:.2%} "
+        f"{bank.name} moves {deviation * 10_000:+.0f}bp {measured_from}, "
         f"to {equilibrium:.2%}; a one standard deviation shock moves the rate "
         f"{impact * 10_000:.0f}bp at its cumulative peak (period {peak_index}), "
         f"so this is {scale:.1f} standard deviations"
@@ -162,6 +186,7 @@ def shock_from_equilibrium(
         bank=bank.name,
         equilibrium_rate=equilibrium,
         current_rate=bank.current_rate,
+        reference_rate=reference,
         impact_response=impact,
         scale=scale,
         concept=solution.concept,
@@ -198,6 +223,7 @@ def path_from_game(
     diagnostics: DiagnosticReport | None = None,
     require_usable: bool = True,
     allow_extreme: bool = False,
+    reference_rate: float | None = None,
 ) -> tuple[ShockPath, PolicyShock]:
     """Build the household-facing macro path from a game equilibrium.
 
@@ -210,9 +236,12 @@ def path_from_game(
     specification gate: at that size the answer comes from extrapolating a
     linear model far outside its sample, and that should be a decision
     rather than an accident.
+
+    `reference_rate` is passed through to `shock_from_equilibrium`.
     """
     shock = shock_from_equilibrium(
-        solution, bank, responses, shock_name, rate_variable
+        solution, bank, responses, shock_name, rate_variable,
+        reference_rate=reference_rate,
     )
 
     if shock.is_extreme and not allow_extreme:
@@ -238,7 +267,6 @@ def mappings_for_bank(
     price_variable: str,
     output_variable: str,
     *,
-    baseline_income_growth: float,
     periods_per_year: float = 12.0,
 ) -> tuple[VariableMapping, ...]:
     """Build mappings anchored to the bank's own current state.
@@ -249,9 +277,26 @@ def mappings_for_bank(
     6.5, so the resulting path was 225 basis points adrift from the rate
     the game had chosen. Deriving the baselines here makes the
     disagreement unrepresentable.
+
+    Income growth comes from the bank for the same reason. It used to be a
+    separate argument defaulting to two percent, so switching the origin
+    to the RBI gave Indian households an Indian rate and inflation but
+    American income growth.
+
+    Raises
+    ------
+    EngineError
+        If the bank declares no `current_income_growth`.
     """
     from moirai.engine.causal.preparation import Transformation
     from moirai.engine.economy.shock_path import MacroVariable
+
+    if bank.current_income_growth is None:
+        raise EngineError(
+            f"{bank.name} declares no current_income_growth, so a household "
+            f"path originating there has no income baseline. Set it on the "
+            f"bank rather than passing a default."
+        )
 
     return (
         VariableMapping(
@@ -276,6 +321,6 @@ def mappings_for_bank(
             transformation=Transformation.LOG_DIFFERENCE,
             scale=periods_per_year,
             cumulate=False,
-            baseline=baseline_income_growth,
+            baseline=bank.current_income_growth,
         ),
     )
