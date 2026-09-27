@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,158 tests. Ten architecture decision records. No external API
+**1,158 tests. Eleven architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -199,6 +199,11 @@ checked against their closed form.
   on judgement.
 - **Two parameters were fitted to their targets** and their agreement is
   construction rather than evidence. Also in ADR 008.
+- **The simultaneous solver is not the equilibrium of the stated loss**
+  for banks with an external weight. It linearises the external term,
+  and the two disagree whenever a bank's rate lies between others'. The
+  RBI's rate can be off by up to about ten basis points, the same order
+  as its imported move. Recorded in ADR 011, not yet resolved.
 - Behavioural rules rather than solved optimisation. Bootstrap bands are
   pointwise, not joint. No credit default, no interbank market.
 
@@ -206,11 +211,12 @@ checked against their closed form.
 
 ## Decisions
 
-Ten ADRs in `docs/decisions/`, including why the LLM belief society was
+Eleven ADRs in `docs/decisions/`, including why the LLM belief society was
 removed, why Indian data uses year-on-year series, why the Indian VAR is
 not credibly identified, the parameter provenance audit, the
-out-of-sample validation results, and how Indian-origin scenarios use the
-US transmission.
+out-of-sample validation results, how Indian-origin scenarios use the
+US transmission, and why leadership in the central bank network is worth
+almost nothing.
 
 ---
 

@@ -119,12 +119,12 @@ of its 146 basis points unprompted, so every scenario's shock shrinks:
 | scenario | origin | shock before | shock after | aggregate before | aggregate after |
 |---|---|---|---|---|---|
 | us_inflation_shock | Fed | +145.8bp | +87.7bp | -0.749% | -0.453% |
-| fed_leads | Fed | +150.0bp | +87.6bp | -0.770% | -0.452% |
+| commitment_value (was fed_leads) | Fed | +150.0bp | +87.6bp | -0.770% | -0.452% |
 | twin_tightening | RBI | +113.0bp | +107.1bp | -0.592% | -0.576% |
 | global_tightening | Fed | +145.1bp | +87.0bp | -0.747% | -0.450% |
 
 The twin_tightening "after" figure also includes this ADR's declarations
-and the income baseline change below. The fed_leads "after" figure also
+and the income baseline change below. The commitment_value "after" figure also
 includes the Stackelberg solver fix of the same date. The old solver
 pinned the leader by overwriting its current rate, which hid the leader's
 move from every spillover channel. Solved properly, Fed leadership is
