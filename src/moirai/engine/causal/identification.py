@@ -28,7 +28,7 @@ from itertools import permutations
 from typing import Any
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from moirai.core.exceptions import EngineError
 from moirai.core.logging import get_logger
@@ -312,13 +312,32 @@ def ordering_sensitivity(
 
 
 class SignRestriction(BaseModel):
-    """A required direction for one variable's impact response to one shock."""
+    """A required direction for one variable's response to one shock.
+
+    By default the restriction applies on impact only. `horizons` extends
+    it to later periods, so "does not raise output for three months" is
+    horizons (0, 1, 2). Responses beyond impact depend on the VAR's
+    dynamics as well as on the rotation, so a horizon restriction says
+    more than an impact one and generally accepts fewer draws.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     variable: str
     shock: str
     sign: Sign
+    horizons: tuple[int, ...] = (0,)
+
+    @field_validator("horizons")
+    @classmethod
+    def _horizons_are_distinct_and_ordered(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        if not value:
+            raise ValueError("a restriction needs at least one horizon")
+        if any(h < 0 for h in value):
+            raise ValueError("horizons must not be negative")
+        if list(value) != sorted(set(value)):
+            raise ValueError("horizons must be strictly increasing")
+        return value
 
     def is_satisfied(self, value: float, tolerance: float = 0.0) -> bool:
         if self.sign is Sign.UNRESTRICTED:
@@ -365,6 +384,19 @@ class SignIdentifiedSet(BaseModel):
     def acceptance_rate(self) -> float:
         return self.n_accepted / self.n_draws if self.n_draws else 0.0
 
+    def response_paths(self, response_of: str, response_to: str, horizon: int) -> np.ndarray:
+        """Every accepted draw's response path, shape (n_accepted, horizon + 1).
+
+        One standard deviation shocks, as in the impulse responses. The set
+        is conditional on the VAR's point estimates: the rotations vary,
+        the reduced form does not.
+        """
+        row = self.var.index_of(response_of)
+        column = self.shock_names.index(response_to)
+        ma = self.var.ma_coefficients(horizon)
+        paths: np.ndarray = np.einsum("hj,nj->nh", ma[:, row, :], self.accepted[:, :, column])
+        return paths
+
     def impact_quantiles(
         self, response_of: str, response_to: str, quantiles: tuple[float, ...] = (0.16, 0.5, 0.84)
     ) -> tuple[float, ...]:
@@ -381,7 +413,12 @@ class SignIdentifiedSet(BaseModel):
             "n_accepted": self.n_accepted,
             "acceptance_rate": round(self.acceptance_rate, 6),
             "restrictions": [
-                {"variable": r.variable, "shock": r.shock, "sign": r.sign.value}
+                {
+                    "variable": r.variable,
+                    "shock": r.shock,
+                    "sign": r.sign.value,
+                    "horizons": list(r.horizons),
+                }
                 for r in self.restrictions
             ],
             "var": self.var.to_ledger_dict(),
@@ -397,11 +434,13 @@ def identify_sign_restrictions(
     seed: int = 42,
     tolerance: float = 0.0,
 ) -> SignIdentifiedSet:
-    """Identify shocks by the direction of their impact responses.
+    """Identify shocks by the direction of their responses.
 
     Every candidate B = P Q, where P is a Cholesky factor and Q is a random
     orthogonal matrix, reproduces Sigma exactly. The restrictions then keep
-    only those candidates whose impact responses point the required way.
+    only those candidates whose responses point the required way at every
+    restricted horizon. The response at horizon h is Psi_h B, so a
+    restriction beyond impact also depends on the VAR's dynamics.
 
     The assumption is weaker than a recursive ordering, and often easier to
     defend: a contractionary monetary shock raises the policy rate and
@@ -432,6 +471,7 @@ def identify_sign_restrictions(
         raise EngineError("residual covariance is not positive definite") from err
 
     rng = np.random.default_rng(seed)
+    ma = var.ma_coefficients(max(h for r in restrictions for h in r.horizons))
     indexed = [
         (var.index_of(r.variable), shock_names.index(r.shock), r) for r in restrictions
     ]
@@ -440,8 +480,9 @@ def identify_sign_restrictions(
     for _ in range(n_draws):
         candidate = base @ _random_orthogonal(var.n_variables, rng)
         if all(
-            restriction.is_satisfied(candidate[row, column], tolerance)
+            restriction.is_satisfied(float(ma[h, row, :] @ candidate[:, column]), tolerance)
             for row, column, restriction in indexed
+            for h in restriction.horizons
         ):
             accepted.append(candidate)
 

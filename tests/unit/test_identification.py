@@ -383,6 +383,69 @@ def test_wrong_shock_name_count_is_rejected(var):
         identify_sign_restrictions(var, CONTRACTIONARY, ("a", "b"))
 
 
+# --- sign restrictions beyond impact ---------------------------------------
+
+SLOW_OUTPUT = (
+    SignRestriction(variable="rate", shock="monetary", sign=Sign.POSITIVE),
+    SignRestriction(
+        variable="output", shock="monetary", sign=Sign.NEGATIVE, horizons=(0, 1, 2)
+    ),
+)
+
+
+def test_a_restriction_defaults_to_impact_only():
+    restriction = SignRestriction(variable="x", shock="s", sign=Sign.POSITIVE)
+    assert restriction.horizons == (0,)
+
+
+@pytest.mark.parametrize("horizons", [(), (-1, 0), (0, 0), (2, 1)])
+def test_invalid_horizons_are_rejected(horizons):
+    with pytest.raises(ValueError):
+        SignRestriction(variable="x", shock="s", sign=Sign.NEGATIVE, horizons=horizons)
+
+
+def test_ma_coefficients_are_powers_of_a_var1(var):
+    """For a VAR(1) the closed form is Psi_h = A^h."""
+    ma = var.ma_coefficients(4)
+    a = var.coefficients[0]
+    for h in range(5):
+        assert np.allclose(ma[h], np.linalg.matrix_power(a, h))
+
+
+def test_response_paths_match_the_closed_form(var):
+    """Response at horizon h to shock j is A^h B[:, j] for a VAR(1)."""
+    result = identify_sign_restrictions(var, SLOW_OUTPUT, SHOCKS, n_draws=500)
+    paths = result.response_paths("output", "monetary", horizon=6)
+    a, row, column = var.coefficients[0], var.index_of("output"), SHOCKS.index("monetary")
+    for n, candidate in enumerate(result.accepted[:20]):
+        for h in range(7):
+            expected = (np.linalg.matrix_power(a, h) @ candidate[:, column])[row]
+            assert paths[n, h] == pytest.approx(expected, abs=1e-12)
+
+
+def test_horizon_restrictions_hold_at_every_restricted_horizon(var):
+    result = identify_sign_restrictions(var, SLOW_OUTPUT, SHOCKS, n_draws=2_000)
+    output = result.response_paths("output", "monetary", horizon=2)
+    rate = result.response_paths("rate", "monetary", horizon=0)
+    assert (output < 0).all()
+    assert (rate[:, 0] > 0).all()
+
+
+def test_later_horizons_can_only_shrink_the_set(var):
+    """With the same seed the draws are identical, so every draw accepted
+    under the longer restriction is accepted under the impact one."""
+    impact = identify_sign_restrictions(var, CONTRACTIONARY, SHOCKS, n_draws=2_000, seed=3)
+    longer = identify_sign_restrictions(var, SLOW_OUTPUT, SHOCKS, n_draws=2_000, seed=3)
+    assert longer.n_accepted <= impact.n_accepted
+    impact_draws = {candidate.tobytes() for candidate in impact.accepted}
+    assert all(candidate.tobytes() in impact_draws for candidate in longer.accepted)
+
+
+def test_horizons_are_recorded_in_the_ledger(var):
+    payload = identify_sign_restrictions(var, SLOW_OUTPUT, SHOCKS, n_draws=500).to_ledger_dict()
+    assert payload["restrictions"][1]["horizons"] == [0, 1, 2]
+
+
 def test_sign_result_serialises_for_the_ledger(var):
     payload = identify_sign_restrictions(
         var, CONTRACTIONARY, SHOCKS, n_draws=500

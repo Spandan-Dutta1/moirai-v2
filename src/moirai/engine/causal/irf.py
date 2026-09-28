@@ -234,24 +234,8 @@ def _index(names: tuple[str, ...], wanted: str, kind: str) -> int:
 
 
 def _ma_coefficients(var: VARResult, horizon: int) -> np.ndarray:
-    """Moving-average coefficients Psi_h for h = 0..horizon.
-
-    Computed by iterating the companion matrix rather than forming A^h
-    directly: repeated multiplication of a k*p square matrix is cheaper and
-    numerically better behaved than exponentiation for the horizons used
-    in practice.
-    """
-    k, p = var.n_variables, var.n_lags
-    companion = var.companion_matrix()
-
-    ma = np.zeros((horizon + 1, k, k), dtype=float)
-    ma[0] = np.eye(k)
-
-    power = np.eye(k * p)
-    for h in range(1, horizon + 1):
-        power = companion @ power
-        ma[h] = power[:k, :k]
-    return ma
+    """Moving-average coefficients Psi_h for h = 0..horizon."""
+    return var.ma_coefficients(horizon)
 
 
 # ---- public ---------------------------------------------------------------

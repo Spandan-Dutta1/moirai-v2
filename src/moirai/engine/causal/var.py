@@ -192,6 +192,30 @@ class VARResult(BaseModel):
         """Stack the VAR into its first-order companion form."""
         return _companion(self.coefficients)
 
+    def ma_coefficients(self, horizon: int) -> np.ndarray:
+        """Moving-average coefficients Psi_h for h = 0..horizon.
+
+        Computed by iterating the companion matrix rather than forming A^h
+        directly: repeated multiplication of a k*p square matrix is cheaper
+        and numerically better behaved than exponentiation for the horizons
+        used in practice. Lives here rather than with the impulse responses
+        because identification needs it too, when a sign restriction
+        applies beyond the impact period.
+        """
+        if horizon < 0:
+            raise EngineError("horizon must not be negative")
+        k, p = self.n_variables, self.n_lags
+        companion = self.companion_matrix()
+
+        ma = np.zeros((horizon + 1, k, k), dtype=float)
+        ma[0] = np.eye(k)
+
+        power = np.eye(k * p)
+        for h in range(1, horizon + 1):
+            power = companion @ power
+            ma[h] = power[:k, :k]
+        return ma
+
     def log_likelihood(self) -> float:
         """Gaussian log likelihood at the estimated parameters."""
         k, t = self.n_variables, self.n_observations
