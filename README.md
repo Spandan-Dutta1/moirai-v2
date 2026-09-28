@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,173 tests. Thirteen architecture decision records. No external API
+**1,183 tests. Fourteen architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -197,7 +197,10 @@ checked against their closed form.
   estimates are conservative.
 - **The Indian VAR is not credibly identified.** Output rises after a rate
   hike across six specifications, which is the RBI tightening into
-  expected strength. Documented in ADRs 007 and 010; the result is withheld.
+  expected strength. Sign restrictions do not rescue it: the identified
+  set straddles zero, and the accepted shocks are mostly output variance,
+  half of it from the pandemic. Documented in ADRs 007, 010 and 014; the
+  result is withheld.
 - **Indian-origin scenarios borrow the US transmission.** Its inflation
   response has the wrong sign for India and its persistence exceeds Indian
   estimates, so those scenarios hold inflation at baseline and stop at 30
@@ -224,9 +227,9 @@ checked against their closed form.
 
 ## Decisions
 
-Thirteen ADRs in `docs/decisions/`, including why the LLM belief society was
+Fourteen ADRs in `docs/decisions/`, including why the LLM belief society was
 removed, why Indian data uses year-on-year series, why the Indian VAR is
-not credibly identified, the parameter provenance audit, the
+not credibly identified by timing or by sign restrictions, the parameter provenance audit, the
 out-of-sample validation results, how Indian-origin scenarios use the
 US transmission, why leadership in the central bank network is worth
 almost nothing, and how the network fares against 2022 and 2013.
