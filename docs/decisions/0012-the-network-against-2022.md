@@ -160,10 +160,13 @@ same reasoning as ADR 009.
 Declare `historical_2022` with its own starting state and observed moves
 in `src/moirai/engine/scenarios.py`, so the test is reproducible offline.
 `scripts/validate_2022.py` recomputes every condition from the data and
-refuses to run on a disagreement.
+refuses to run on a disagreement. The design itself lives in
+`scripts/historical_validation.py`, shared with ADR 013, so that a second
+year cannot quietly change it.
 
-Tests in `tests/unit/test_scenarios.py` pin two properties:
-`test_the_2022_caused_move_splits_exactly_by_condition`, on which the
+Tests in `tests/unit/test_scenarios.py` pin two properties for every
+historical scenario:
+`test_a_historical_caused_move_splits_exactly_by_condition`, on which the
 attribution above rests, and
 `test_the_simultaneous_solver_is_approximate_when_the_band_binds`, which
 measures the gap ADR 011 predicted.

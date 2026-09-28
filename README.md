@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,167 tests. Twelve architecture decision records. No external API
+**1,173 tests. Thirteen architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -79,7 +79,11 @@ after seeing the answer would convert the test into a second fit. The
 central bank network was then tested, untuned, against calendar 2022. The
 RBI-to-Fed ratio of total moves is 58% modelled against 53% observed, but
 the Fed and the RBI each under-move by about a third, the ECB overshoots
-by 60% and the Bank of Japan tightens when it held. ADR 012.
+by 60% and the Bank of Japan tightens when it held. ADR 012. The same
+fixed design applied to 2013, the taper tantrum year, fails on the one
+move large enough to judge: the model has the RBI hiking 153bp against
+an observed 25bp cut, and three banks solve below zero. The design
+cannot represent the tantrum itself, a shock to expected rates. ADR 013.
 
 **Calibration provenance.** Every target is marked SOURCED, DERIVED or
 UNSOURCED. Four of seven household targets are unsourced, and the reports
@@ -205,11 +209,14 @@ checked against their closed form.
   construction rather than evidence. Also in ADR 008.
 - **The simultaneous solver is exact only while every bank ends inside
   its tolerance band.** The RBI's band penalty is the one nonlinearity
-  the reaction system does not model. `historical_2022` leaves the RBI
-  outside its band, and there the RBI's best reply under the true loss
-  sits 10.8bp above the solved rate. Every other declared scenario stays
-  inside, where a test checks the solved rates are best replies. ADRs
-  011 and 012.
+  the reaction system does not model. Both historical scenarios leave
+  the RBI outside its band, and there the RBI's best reply under the true
+  loss sits above the solved rate: 10.8bp in `historical_2022`, 26.7bp in
+  `historical_2013`. Every other declared scenario stays inside, where a
+  test checks the solved rates are best replies. ADRs 011 to 013.
+- **No lower bound on policy rates, and no expectations channel.** Banks
+  near zero with inflation below target solve to negative rates, and a
+  shock to expected policy with no rate move cannot be expressed. ADR 013.
 - Behavioural rules rather than solved optimisation. Bootstrap bands are
   pointwise, not joint. No credit default, no interbank market.
 
@@ -217,12 +224,12 @@ checked against their closed form.
 
 ## Decisions
 
-Twelve ADRs in `docs/decisions/`, including why the LLM belief society was
+Thirteen ADRs in `docs/decisions/`, including why the LLM belief society was
 removed, why Indian data uses year-on-year series, why the Indian VAR is
 not credibly identified, the parameter provenance audit, the
 out-of-sample validation results, how Indian-origin scenarios use the
 US transmission, why leadership in the central bank network is worth
-almost nothing, and how the network fares against 2022.
+almost nothing, and how the network fares against 2022 and 2013.
 
 ---
 
