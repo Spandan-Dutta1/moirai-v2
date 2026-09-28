@@ -28,17 +28,19 @@ from moirai.engine.financial.central_banks import (
     ECB,
     FED,
     RBI,
+    CentralBank,
 )
 from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
 from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix, network_nash
 from moirai.engine.scenarios import (
     DEFAULT_SCENARIOS,
+    HISTORICAL_2013,
     HISTORICAL_2022,
     HISTORICAL_SCENARIOS,
     HORIZON_CAPPED_FOR_INDIA,
     IMPORTED_TIGHTENING,
     INFLATION_HELD_FOR_INDIA,
-    JANUARY_2022_BANKS,
+    OBSERVED_2013_MOVES_BP,
     OBSERVED_2022_MOVES_BP,
     TWIN_TIGHTENING,
     Condition,
@@ -47,6 +49,7 @@ from moirai.engine.scenarios import (
     Scenario,
     SolutionMode,
     compare,
+    historical_banks,
     run_scenario,
 )
 
@@ -649,89 +652,120 @@ def test_an_implausible_shock_is_refused(population, spillovers):
     with pytest.raises(EngineError, match="plausible range"):
         execute(extreme, population, spillovers)
 
-# --- the historical scenario: calendar 2022 (ADR 012) ---------------------
+# --- historical scenarios: 2022 and 2013 (ADRs 012, 013) -----------------
+
+HISTORICAL_IDS = [scenario.name for scenario, _ in HISTORICAL_SCENARIOS]
+OBSERVED = {
+    HISTORICAL_2022.name: OBSERVED_2022_MOVES_BP,
+    HISTORICAL_2013.name: OBSERVED_2013_MOVES_BP,
+}
+
 
 @pytest.fixture(scope="module")
 def sourced_spillovers() -> SpilloverMatrix:
     return SpilloverMatrix.from_literature(DEFAULT_TIERS)
 
 
-def solve_2022(conditions: tuple[Condition, ...], spillovers: SpilloverMatrix):
-    scenario = HISTORICAL_2022.model_copy(update={"conditions": conditions})
-    return network_nash(scenario.apply_to(JANUARY_2022_BANKS), spillovers)
+def solve_historical(
+    scenario: Scenario,
+    banks: tuple[CentralBank, ...],
+    conditions: tuple[Condition, ...],
+    spillovers: SpilloverMatrix,
+):
+    only = scenario.model_copy(update={"conditions": conditions})
+    return network_nash(only.apply_to(banks), spillovers)
 
 
-def test_every_historical_scenario_conditions_banks_it_carries():
-    for scenario, banks in HISTORICAL_SCENARIOS:
-        names = {b.name for b in banks}
-        assert {c.bank for c in scenario.conditions} <= names, scenario.name
-        assert scenario.shock_origin in names, scenario.name
+def test_every_historical_scenario_has_observed_moves():
+    assert set(OBSERVED) == set(HISTORICAL_IDS)
 
 
-def test_the_2022_reference_game_has_no_inflation_problem():
+@pytest.mark.parametrize(("scenario", "banks"), HISTORICAL_SCENARIOS, ids=HISTORICAL_IDS)
+def test_a_historical_scenario_conditions_banks_it_carries(scenario, banks):
+    names = {b.name for b in banks}
+    assert {c.bank for c in scenario.conditions} <= names
+    assert scenario.shock_origin in names
+    assert set(OBSERVED[scenario.name]) == names
+
+
+@pytest.mark.parametrize(("scenario", "banks"), HISTORICAL_SCENARIOS, ids=HISTORICAL_IDS)
+def test_a_historical_reference_game_has_no_inflation_problem(scenario, banks):
     """Caused is measured against every bank at its target. The default
     banks' states describe a later period and would be incoherent next to
-    January 2022 rates."""
-    for bank in JANUARY_2022_BANKS:
+    historical rates."""
+    for bank in banks:
         assert bank.current_inflation == bank.inflation_target, bank.name
         assert bank.current_output_gap == 0.0, bank.name
 
 
-def test_the_2022_observed_moves_cover_every_bank():
-    assert set(OBSERVED_2022_MOVES_BP) == {b.name for b in JANUARY_2022_BANKS}
+def test_historical_banks_need_a_rate_for_every_bank():
+    with pytest.raises(EngineError, match="every major bank"):
+        historical_banks({FED.name: 0.01})
 
 
-def test_the_2022_caused_move_splits_exactly_by_condition(sourced_spillovers):
+@pytest.mark.parametrize(("scenario", "banks"), HISTORICAL_SCENARIOS, ids=HISTORICAL_IDS)
+def test_a_historical_caused_move_splits_exactly_by_condition(
+    scenario, banks, sourced_spillovers
+):
     """The reaction system is linear in inflation, so each bank's
     condition contributes separately and the parts sum to the whole. The
-    Fed-versus-India attribution in ADR 012 rests on this."""
-    reference = solve_2022((), sourced_spillovers)
-    together = solve_2022(HISTORICAL_2022.conditions, sourced_spillovers)
-    parts = [solve_2022((c,), sourced_spillovers) for c in HISTORICAL_2022.conditions]
-
-    for bank in JANUARY_2022_BANKS:
+    attributions in ADRs 012 and 013 rest on this."""
+    reference = solve_historical(scenario, banks, (), sourced_spillovers)
+    together = solve_historical(scenario, banks, scenario.conditions, sourced_spillovers)
+    parts = [
+        solve_historical(scenario, banks, (c,), sourced_spillovers)
+        for c in scenario.conditions
+    ]
+    for bank in banks:
         caused = together.rates[bank.name] - reference.rates[bank.name]
         summed = sum(p.rates[bank.name] - reference.rates[bank.name] for p in parts)
         assert summed == pytest.approx(caused, abs=1e-12), bank.name
 
 
-def test_the_2022_scenario_leaves_the_rbi_outside_its_band(sourced_spillovers):
-    """The first declared scenario to do so, which is why the README no
-    longer claims none does. Detected by the band penalty being active in
+def conditioned_state(scenario, banks, spillovers):
+    solved = solve_historical(scenario, banks, scenario.conditions, spillovers)
+    names = spillovers.names
+    conditioned = scenario.apply_to(banks)
+    ordered = tuple(next(b for b in conditioned if b.name == n) for n in names)
+    rates = np.array([solved.rates[n] for n in names])
+    return ordered, rates
+
+
+@pytest.mark.parametrize(("scenario", "banks"), HISTORICAL_SCENARIOS, ids=HISTORICAL_IDS)
+def test_a_historical_scenario_leaves_the_rbi_outside_its_band(
+    scenario, banks, sourced_spillovers
+):
+    """Both historical years do, which is why the README no longer claims
+    no declared scenario does. Detected by the band penalty being active in
     the RBI's realised loss, not by restating the transmission."""
     from moirai.engine.financial.network import _losses_at
 
-    solved = solve_2022(HISTORICAL_2022.conditions, sourced_spillovers)
-    names = sourced_spillovers.names
-    banks = HISTORICAL_2022.apply_to(JANUARY_2022_BANKS)
-    ordered = tuple(next(b for b in banks if b.name == n) for n in names)
+    ordered, rates = conditioned_state(scenario, banks, sourced_spillovers)
     unbanded = tuple(
         b.model_copy(update={"tolerance_lower": None, "tolerance_upper": None})
         if b.name == RBI.name
         else b
         for b in ordered
     )
-    rates = np.array([solved.rates[n] for n in names])
-
     with_band = _losses_at(ordered, rates, sourced_spillovers)[RBI.name]
     without = _losses_at(unbanded, rates, sourced_spillovers)[RBI.name]
     assert with_band > without
 
 
-def test_the_simultaneous_solver_is_approximate_when_the_band_binds(sourced_spillovers):
+@pytest.mark.parametrize(("scenario", "banks"), HISTORICAL_SCENARIOS, ids=HISTORICAL_IDS)
+def test_the_simultaneous_solver_is_approximate_when_the_band_binds(
+    scenario, banks, sourced_spillovers
+):
     """ADR 011 predicted this: the reaction system omits the band penalty,
     so outside the band the solved rate is not the RBI's best reply under
-    its true loss. The gap is measured, not assumed. ADR 012 records it."""
+    its true loss. The gap is measured, not assumed. ADRs 012 and 013
+    record it."""
     from scipy.optimize import minimize_scalar
 
     from moirai.engine.financial.network import _losses_at
 
-    solved = solve_2022(HISTORICAL_2022.conditions, sourced_spillovers)
-    names = sourced_spillovers.names
-    banks = HISTORICAL_2022.apply_to(JANUARY_2022_BANKS)
-    ordered = tuple(next(b for b in banks if b.name == n) for n in names)
-    rates = np.array([solved.rates[n] for n in names])
-    i = names.index(RBI.name)
+    ordered, rates = conditioned_state(scenario, banks, sourced_spillovers)
+    i = sourced_spillovers.names.index(RBI.name)
 
     def rbi_loss(rate: float) -> float:
         trial = rates.copy()
@@ -740,9 +774,8 @@ def test_the_simultaneous_solver_is_approximate_when_the_band_binds(sourced_spil
 
     reply = minimize_scalar(
         rbi_loss,
-        bounds=(rates[i] - 0.02, rates[i] + 0.02),
+        bounds=(rates[i] - 0.05, rates[i] + 0.05),
         method="bounded",
         options={"xatol": 1e-11},
     ).x
     assert reply - rates[i] > 0.0001
-

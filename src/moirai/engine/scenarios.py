@@ -606,16 +606,31 @@ _JANUARY_2022_RATES: dict[str, float] = {
     RBI: 0.0400,  # policy repo rate, RBI
 }
 
-JANUARY_2022_BANKS: tuple[CentralBank, ...] = tuple(
-    bank.model_copy(
-        update={
-            "current_rate": _JANUARY_2022_RATES[bank.name],
-            "current_inflation": bank.inflation_target,
-            "current_output_gap": 0.0,
-        }
+
+
+def historical_banks(rates: dict[str, float]) -> tuple[CentralBank, ...]:
+    """The major banks at historical starting rates, with no inflation problem.
+
+    The reference state of every historical validation: each bank at its
+    target with a zero output gap, so the scenario's conditions are the
+    whole of what is caused. Mandates and weights are today's, whatever
+    the year; a historical scenario says where that is anachronistic.
+    """
+    if set(rates) != {bank.name for bank in MAJOR_CENTRAL_BANKS}:
+        raise EngineError(f"starting rates must cover every major bank, got {sorted(rates)}")
+    return tuple(
+        bank.model_copy(
+            update={
+                "current_rate": rates[bank.name],
+                "current_inflation": bank.inflation_target,
+                "current_output_gap": 0.0,
+            }
+        )
+        for bank in MAJOR_CENTRAL_BANKS
     )
-    for bank in MAJOR_CENTRAL_BANKS
-)
+
+
+JANUARY_2022_BANKS: tuple[CentralBank, ...] = historical_banks(_JANUARY_2022_RATES)
 
 #: What each bank did over calendar 2022, in basis points, measured on the
 #: same series as the starting rates. The Bank of Japan's figure is the
@@ -681,7 +696,99 @@ HISTORICAL_2022 = Scenario(
     horizon_cap=HORIZON_CAPPED_FOR_INDIA,
 )
 
+
+# ---- a historical scenario: calendar 2013, the taper tantrum (ADR 013) -----
+#
+# The same fixed design as 2022, applied to the year of the taper tantrum.
+# The design conditions each bank on its inflation, and the tantrum was a
+# shock to expected Fed policy with no move in the Fed's rate, so this
+# tests whether the network explains 2013's rate decisions, not whether it
+# reproduces the tantrum. Three anachronisms are carried, not corrected:
+# the RBI had no inflation target until 2015-16, the ECB's target was
+# "below but close to" two percent, and the model has no lower bound
+# while four of the five banks were near zero.
+
+_JANUARY_2013_RATES: dict[str, float] = {
+    FED: 0.0025,  # DFEDTARU, target range upper bound
+    ECB: 0.0000,  # ECBDFR, deposit facility rate; the MRO was 0.75%
+    BOE: 0.0050,  # BOERUKM, Bank Rate
+    BOJ: 0.00083,  # IRSTCI01JPM156N, overnight call rate, January average
+    RBI: 0.0800,  # policy repo rate, RBI, in force on 1 January (cut on 29 January)
+}
+
+JANUARY_2013_BANKS: tuple[CentralBank, ...] = historical_banks(_JANUARY_2013_RATES)
+
+#: What each bank did over calendar 2013, in basis points, on the same
+#: series as the starting rates. The ECB cut its main refinancing rate by
+#: 50bp while the deposit rate stayed at zero. The RBI's -25bp nets three
+#: cuts before the tantrum against two hikes after it, and leaves out the
+#: 200bp rise in its marginal standing facility rate from July to October.
+OBSERVED_2013_MOVES_BP: dict[str, float] = {
+    FED: 0.0,
+    ECB: 0.0,
+    BOE: 0.0,
+    BOJ: -1.3,
+    RBI: -25.0,
+}
+
+HISTORICAL_2013 = Scenario(
+    name="historical_2013",
+    description=(
+        "Calendar 2013, the taper tantrum year: every bank from its 1 January "
+        "rate at its 2013 average inflation. Run against JANUARY_2013_BANKS"
+    ),
+    conditions=(
+        Condition(
+            bank=FED,
+            inflation=0.01319,
+            note="PCE price index (PCEPI), mean of 2013 monthly year-on-year rates",
+        ),
+        Condition(
+            bank=ECB,
+            inflation=0.01354,
+            note=(
+                "HICP of the then 17-member euro area (CP0000EZ17M086NEST), mean "
+                "of 2013 monthly year-on-year rates"
+            ),
+        ),
+        Condition(
+            bank=BOE,
+            inflation=0.02293,
+            note="CPI (GBRCPIALLMINMEI), mean of 2013 monthly year-on-year rates",
+        ),
+        Condition(
+            bank=BOJ,
+            inflation=0.00338,
+            note="CPI all items (JPNCPIALLMINMEI), mean of 2013 monthly year-on-year rates",
+        ),
+        Condition(
+            bank=RBI,
+            inflation=0.10072,
+            note=(
+                "CPI Combined as published by the RBI, mean of 2013 year-on-year "
+                "rates (warehouse in_cpi_inflation). The RBI had no CPI target in "
+                "2013 and gave weight to WPI"
+            ),
+        ),
+    ),
+    shock_origin=RBI,
+    rationale=(
+        "The second application of the fixed design of ADR 012, to the taper "
+        "tantrum year. The design can only express inflation conditions, and "
+        "the tantrum was a shock to expected Fed policy with no move in the "
+        "Fed's rate, so the scenario tests whether the network explains "
+        "2013's rate decisions, not whether it reproduces the tantrum. It "
+        "does not: the RBI hikes 153bp in the model against a 25bp cut, "
+        "driven by 10 percent CPI against a target the RBI did not have. "
+        "Three banks solve below zero, and the RBI ends outside its band. "
+        "See ADR 013 and scripts/validate_2013.py."
+    ),
+    held_channels=(INFLATION_HELD_FOR_INDIA,),
+    horizon_cap=HORIZON_CAPPED_FOR_INDIA,
+)
+
 #: Historical scenarios, each paired with the starting state it describes.
 HISTORICAL_SCENARIOS: tuple[tuple[Scenario, tuple[CentralBank, ...]], ...] = (
     (HISTORICAL_2022, JANUARY_2022_BANKS),
+    (HISTORICAL_2013, JANUARY_2013_BANKS),
 )
