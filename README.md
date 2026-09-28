@@ -7,7 +7,7 @@ Five central banks solve a game to set policy. An estimated VAR supplies
 the transmission. Twelve commercial banks set the rates people actually
 pay. Two hundred thousand heterogeneous households bear the result.
 
-**1,161 tests. Eleven architecture decision records. No external API
+**1,167 tests. Twelve architecture decision records. No external API
 dependency in the engine.**
 
 ---
@@ -75,7 +75,11 @@ latter credits the model with data that did not exist.
 on the RBI's easing cycle, where five of six checks pass by construction.
 The tightening cycle was held out. **One of three predictions survived.**
 The failures are documented rather than fixed, because adding mechanisms
-after seeing the answer would convert the test into a second fit.
+after seeing the answer would convert the test into a second fit. The
+central bank network was then tested, untuned, against calendar 2022. The
+RBI-to-Fed ratio of total moves is 58% modelled against 53% observed, but
+the Fed and the RBI each under-move by about a third, the ECB overshoots
+by 60% and the Bank of Japan tightens when it held. ADR 012.
 
 **Calibration provenance.** Every target is marked SOURCED, DERIVED or
 UNSOURCED. Four of seven household targets are unsourced, and the reports
@@ -201,9 +205,11 @@ checked against their closed form.
   construction rather than evidence. Also in ADR 008.
 - **The simultaneous solver is exact only while every bank ends inside
   its tolerance band.** The RBI's band penalty is the one nonlinearity
-  the reaction system does not model. No declared scenario breaches it,
-  and a test checks the solved rates are best replies under the true
-  loss. ADR 011.
+  the reaction system does not model. `historical_2022` leaves the RBI
+  outside its band, and there the RBI's best reply under the true loss
+  sits 10.8bp above the solved rate. Every other declared scenario stays
+  inside, where a test checks the solved rates are best replies. ADRs
+  011 and 012.
 - Behavioural rules rather than solved optimisation. Bootstrap bands are
   pointwise, not joint. No credit default, no interbank market.
 
@@ -211,12 +217,12 @@ checked against their closed form.
 
 ## Decisions
 
-Eleven ADRs in `docs/decisions/`, including why the LLM belief society was
+Twelve ADRs in `docs/decisions/`, including why the LLM belief society was
 removed, why Indian data uses year-on-year series, why the Indian VAR is
 not credibly identified, the parameter provenance audit, the
 out-of-sample validation results, how Indian-origin scenarios use the
-US transmission, and why leadership in the central bank network is worth
-almost nothing.
+US transmission, why leadership in the central bank network is worth
+almost nothing, and how the network fares against 2022.
 
 ---
 
