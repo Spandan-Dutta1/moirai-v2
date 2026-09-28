@@ -33,9 +33,13 @@ from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
 from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix, network_nash
 from moirai.engine.scenarios import (
     DEFAULT_SCENARIOS,
+    HISTORICAL_2022,
+    HISTORICAL_SCENARIOS,
     HORIZON_CAPPED_FOR_INDIA,
     IMPORTED_TIGHTENING,
     INFLATION_HELD_FOR_INDIA,
+    JANUARY_2022_BANKS,
+    OBSERVED_2022_MOVES_BP,
     TWIN_TIGHTENING,
     Condition,
     HeldChannel,
@@ -47,6 +51,7 @@ from moirai.engine.scenarios import (
 )
 
 BANKS = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+DECLARED = (*DEFAULT_SCENARIOS, *(scenario for scenario, _ in HISTORICAL_SCENARIOS))
 VARIABLES = ("indpro", "cpiaucsl", "fedfunds")
 
 
@@ -433,12 +438,12 @@ def test_comparing_nothing_is_rejected():
 # --- the declared scenarios ------------------------------------------------
 def test_every_declared_scenario_has_a_rationale():
     """A scenario without a stated reason is a number nobody asked for."""
-    for scenario in DEFAULT_SCENARIOS:
+    for scenario in DECLARED:
         assert scenario.rationale.strip(), f"{scenario.name} has no rationale"
 
 
 def test_declared_scenario_names_are_unique():
-    names = [s.name for s in DEFAULT_SCENARIOS]
+    names = [s.name for s in DECLARED]
     assert len(set(names)) == len(names)
 
 
@@ -485,7 +490,7 @@ def test_every_rbi_origin_scenario_declares_the_proxy_limits():
     inflation sign and persistence the Indian evidence contradicts. A
     declared scenario that used it without saying so would be silent
     about both. See ADR 010."""
-    for scenario in DEFAULT_SCENARIOS:
+    for scenario in DECLARED:
         if scenario.shock_origin != RBI.name:
             continue
         assert INFLATION_HELD_FOR_INDIA in scenario.held_channels, scenario.name
@@ -643,3 +648,101 @@ def test_an_implausible_shock_is_refused(population, spillovers):
     )
     with pytest.raises(EngineError, match="plausible range"):
         execute(extreme, population, spillovers)
+
+# --- the historical scenario: calendar 2022 (ADR 012) ---------------------
+
+@pytest.fixture(scope="module")
+def sourced_spillovers() -> SpilloverMatrix:
+    return SpilloverMatrix.from_literature(DEFAULT_TIERS)
+
+
+def solve_2022(conditions: tuple[Condition, ...], spillovers: SpilloverMatrix):
+    scenario = HISTORICAL_2022.model_copy(update={"conditions": conditions})
+    return network_nash(scenario.apply_to(JANUARY_2022_BANKS), spillovers)
+
+
+def test_every_historical_scenario_conditions_banks_it_carries():
+    for scenario, banks in HISTORICAL_SCENARIOS:
+        names = {b.name for b in banks}
+        assert {c.bank for c in scenario.conditions} <= names, scenario.name
+        assert scenario.shock_origin in names, scenario.name
+
+
+def test_the_2022_reference_game_has_no_inflation_problem():
+    """Caused is measured against every bank at its target. The default
+    banks' states describe a later period and would be incoherent next to
+    January 2022 rates."""
+    for bank in JANUARY_2022_BANKS:
+        assert bank.current_inflation == bank.inflation_target, bank.name
+        assert bank.current_output_gap == 0.0, bank.name
+
+
+def test_the_2022_observed_moves_cover_every_bank():
+    assert set(OBSERVED_2022_MOVES_BP) == {b.name for b in JANUARY_2022_BANKS}
+
+
+def test_the_2022_caused_move_splits_exactly_by_condition(sourced_spillovers):
+    """The reaction system is linear in inflation, so each bank's
+    condition contributes separately and the parts sum to the whole. The
+    Fed-versus-India attribution in ADR 012 rests on this."""
+    reference = solve_2022((), sourced_spillovers)
+    together = solve_2022(HISTORICAL_2022.conditions, sourced_spillovers)
+    parts = [solve_2022((c,), sourced_spillovers) for c in HISTORICAL_2022.conditions]
+
+    for bank in JANUARY_2022_BANKS:
+        caused = together.rates[bank.name] - reference.rates[bank.name]
+        summed = sum(p.rates[bank.name] - reference.rates[bank.name] for p in parts)
+        assert summed == pytest.approx(caused, abs=1e-12), bank.name
+
+
+def test_the_2022_scenario_leaves_the_rbi_outside_its_band(sourced_spillovers):
+    """The first declared scenario to do so, which is why the README no
+    longer claims none does. Detected by the band penalty being active in
+    the RBI's realised loss, not by restating the transmission."""
+    from moirai.engine.financial.network import _losses_at
+
+    solved = solve_2022(HISTORICAL_2022.conditions, sourced_spillovers)
+    names = sourced_spillovers.names
+    banks = HISTORICAL_2022.apply_to(JANUARY_2022_BANKS)
+    ordered = tuple(next(b for b in banks if b.name == n) for n in names)
+    unbanded = tuple(
+        b.model_copy(update={"tolerance_lower": None, "tolerance_upper": None})
+        if b.name == RBI.name
+        else b
+        for b in ordered
+    )
+    rates = np.array([solved.rates[n] for n in names])
+
+    with_band = _losses_at(ordered, rates, sourced_spillovers)[RBI.name]
+    without = _losses_at(unbanded, rates, sourced_spillovers)[RBI.name]
+    assert with_band > without
+
+
+def test_the_simultaneous_solver_is_approximate_when_the_band_binds(sourced_spillovers):
+    """ADR 011 predicted this: the reaction system omits the band penalty,
+    so outside the band the solved rate is not the RBI's best reply under
+    its true loss. The gap is measured, not assumed. ADR 012 records it."""
+    from scipy.optimize import minimize_scalar
+
+    from moirai.engine.financial.network import _losses_at
+
+    solved = solve_2022(HISTORICAL_2022.conditions, sourced_spillovers)
+    names = sourced_spillovers.names
+    banks = HISTORICAL_2022.apply_to(JANUARY_2022_BANKS)
+    ordered = tuple(next(b for b in banks if b.name == n) for n in names)
+    rates = np.array([solved.rates[n] for n in names])
+    i = names.index(RBI.name)
+
+    def rbi_loss(rate: float) -> float:
+        trial = rates.copy()
+        trial[i] = rate
+        return _losses_at(ordered, trial, sourced_spillovers)[RBI.name]
+
+    reply = minimize_scalar(
+        rbi_loss,
+        bounds=(rates[i] - 0.02, rates[i] + 0.02),
+        method="bounded",
+        options={"xatol": 1e-11},
+    ).x
+    assert reply - rates[i] > 0.0001
+

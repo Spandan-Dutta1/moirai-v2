@@ -42,7 +42,7 @@ from moirai.engine.economy.behaviour import BehaviourParameters, counterfactual
 from moirai.engine.economy.households import Population
 from moirai.engine.economy.policy_shock import PolicyShock, mappings_for_bank, path_from_game
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath
-from moirai.engine.financial.central_banks import CentralBank
+from moirai.engine.financial.central_banks import MAJOR_CENTRAL_BANKS, CentralBank
 from moirai.engine.financial.commercial_banks import BankingSystem
 from moirai.engine.financial.network import (
     NetworkEquilibrium,
@@ -442,6 +442,8 @@ def compare(results: tuple[ScenarioResult, ...]) -> dict[str, Any]:
 FED = "Federal Reserve"
 RBI = "Reserve Bank of India"
 ECB = "European Central Bank"
+BOE = "Bank of England"
+BOJ = "Bank of Japan"
 
 # ---- the US transmission delivered to Indian households (ADR 010) --------
 #
@@ -581,4 +583,105 @@ DEFAULT_SCENARIOS: tuple[Scenario, ...] = (
     COMMITMENT_VALUE,
     TWIN_TIGHTENING,
     GLOBAL_TIGHTENING,
+)
+
+# ---- a historical scenario: calendar 2022 (ADR 012) -----------------------
+#
+# The network's second out-of-sample test, after the banking layer's
+# (ADR 009). Nothing was tuned to 2022. The banks start from their January
+# 2022 rates, each faces its 2022 average inflation, and the solved moves
+# are compared with what the banks did over the year.
+#
+# The default banks describe a later period, so this scenario is declared
+# with its own starting state and must be run against it. The reference
+# game puts every bank at its inflation target, so "caused" is what the
+# 2022 inflation produced and "unprompted" is what the starting rates
+# alone produce.
+
+_JANUARY_2022_RATES: dict[str, float] = {
+    FED: 0.0025,  # DFEDTARU, target range upper bound
+    ECB: -0.0050,  # ECBDFR, deposit facility rate
+    BOE: 0.0025,  # Bank Rate as published; not on FRED (SONIA was 0.191%)
+    BOJ: -0.0002,  # IRSTCI01JPM156N, overnight call rate
+    RBI: 0.0400,  # policy repo rate, RBI
+}
+
+JANUARY_2022_BANKS: tuple[CentralBank, ...] = tuple(
+    bank.model_copy(
+        update={
+            "current_rate": _JANUARY_2022_RATES[bank.name],
+            "current_inflation": bank.inflation_target,
+            "current_output_gap": 0.0,
+        }
+    )
+    for bank in MAJOR_CENTRAL_BANKS
+)
+
+#: What each bank did over calendar 2022, in basis points, measured on the
+#: same series as the starting rates. The Bank of Japan's figure is the
+#: call rate drifting; its policy balance rate stayed at -0.10 percent.
+OBSERVED_2022_MOVES_BP: dict[str, float] = {
+    FED: 425.0,
+    ECB: 250.0,
+    BOE: 325.0,
+    BOJ: -5.0,
+    RBI: 225.0,
+}
+
+HISTORICAL_2022 = Scenario(
+    name="historical_2022",
+    description=(
+        "Calendar 2022: every bank from its January rate at its 2022 average "
+        "inflation. Run against JANUARY_2022_BANKS"
+    ),
+    conditions=(
+        Condition(
+            bank=FED,
+            inflation=0.06545,
+            note="PCE price index (PCEPI), mean of 2022 monthly year-on-year rates",
+        ),
+        Condition(
+            bank=ECB,
+            inflation=0.08365,
+            note="HICP (CP0000EZ19M086NEST), mean of 2022 monthly year-on-year rates",
+        ),
+        Condition(
+            bank=BOE,
+            inflation=0.07901,
+            note="CPI (GBRCPIALLMINMEI), mean of 2022 monthly year-on-year rates",
+        ),
+        Condition(
+            bank=BOJ,
+            inflation=0.025,
+            note=(
+                "CPI all items, 2022 annual average, Statistics Bureau of Japan; "
+                "FRED's OECD series ends in 2021"
+            ),
+        ),
+        Condition(
+            bank=RBI,
+            inflation=0.06692,
+            note=(
+                "CPI Combined as published by the RBI, mean of 2022 year-on-year "
+                "rates (warehouse in_cpi_inflation); peak 7.79 percent in April"
+            ),
+        ),
+    ),
+    shock_origin=RBI,
+    rationale=(
+        "An out-of-sample test of the network, with nothing tuned to 2022. "
+        "Like for like, the model's RBI-to-Fed ratio of total moves is 58 "
+        "percent against 53 observed, but both banks under-move by about a "
+        "third, the ECB overshoots by 60 percent and the Bank of Japan "
+        "tightens when it did not. The RBI ends outside its band, the first "
+        "declared scenario to do so, which makes the simultaneous solver "
+        "approximate here. See ADR 012 and scripts/validate_2022.py."
+    ),
+    held_channels=(INFLATION_HELD_FOR_INDIA,),
+    horizon_cap=HORIZON_CAPPED_FOR_INDIA,
+)
+
+#: Historical scenarios, each paired with the starting state it describes.
+HISTORICAL_SCENARIOS: tuple[tuple[Scenario, tuple[CentralBank, ...]], ...] = (
+    (HISTORICAL_2022, JANUARY_2022_BANKS),
 )
