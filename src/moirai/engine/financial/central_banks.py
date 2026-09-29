@@ -610,8 +610,14 @@ def _loss_coefficients(
     demand = spillovers.demand_spillover
     passthrough = spillovers.exchange_passthrough if bank.external_weight > 0 else 0.0
 
-    # Sign of the exchange rate term depends on which side of the pair.
-    sign = 1.0 if is_home else -1.0
+    # The exchange rate term has the same sign for both banks. Each bank's
+    # inflation falls when it tightens by more than the other, because its
+    # currency appreciates. The pair's orientation is already carried by
+    # `differential` in `_losses_at` and `build_policy_game`; flipping the
+    # sign here as well counted it twice and gave the foreign bank a
+    # reaction function in which relative tightening raised its inflation.
+    # `is_home` is kept so callers are unchanged. See ADR 015.
+    sign = 1.0
 
     # inflation = pi0 - d_inf*(r - r0) - sign*passthrough*((r - r0) - (o - o0))
     inf_own = -(d_inf + sign * passthrough)

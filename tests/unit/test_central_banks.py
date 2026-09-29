@@ -435,3 +435,80 @@ def test_analyse_pair_records_both_mandates():
 
 def test_analyse_pair_records_the_spillovers():
     assert "demand_spillover" in analyse_pair(FED, RBI)["spillovers"]
+
+
+# --- the analytic Nash is an equilibrium of the stated loss ------------------
+#
+# The tests above check that the analytic solution is close to the grid
+# solution, within 50bp. That tolerance let a sign error in the foreign
+# bank's exchange rate term pass: with the RBI as the foreign bank, its
+# solved rate sat 23bp from its true best reply. The tests below check the
+# defining property directly, which is the lesson ADR 011 drew for the
+# network solver, applied to the pairwise one.
+
+
+def _true_best_reply(home, foreign, rate_home, rate_foreign, who):
+    from scipy.optimize import minimize_scalar
+
+    from moirai.engine.financial.central_banks import _losses_at
+
+    spillovers = SpilloverParameters()
+    if who == "home":
+        objective = lambda r: _losses_at(home, foreign, r, rate_foreign, spillovers)[home.name]  # noqa: E731
+    else:
+        objective = lambda r: _losses_at(home, foreign, rate_home, r, spillovers)[foreign.name]  # noqa: E731
+    return minimize_scalar(
+        objective, bounds=(-0.10, 0.30), method="bounded", options={"xatol": 1e-12}
+    ).x
+
+
+PAIRS = [(FED, RBI), (RBI, FED), (ECB, RBI), (RBI, ECB), (BANK_OF_JAPAN, BANK_OF_ENGLAND)]
+
+
+@pytest.mark.parametrize(("home", "foreign"), PAIRS, ids=lambda b: b.name)
+def test_each_solved_rate_is_a_best_reply(home, foreign):
+    """Every bank's solved rate minimises its own loss given the other's."""
+    solution = analytic_nash(home, foreign)
+    rate_home, rate_foreign = solution.rates[home.name], solution.rates[foreign.name]
+    assert _true_best_reply(home, foreign, rate_home, rate_foreign, "home") == pytest.approx(
+        rate_home, abs=1e-6
+    )
+    assert _true_best_reply(home, foreign, rate_home, rate_foreign, "foreign") == pytest.approx(
+        rate_foreign, abs=1e-6
+    )
+
+
+@pytest.mark.parametrize(("first", "second"), PAIRS[::2], ids=lambda b: b.name)
+def test_the_equilibrium_does_not_depend_on_which_bank_is_home(first, second):
+    """A metamorphic check: relabelling the players cannot change the game."""
+    one = analytic_nash(first, second)
+    other = analytic_nash(second, first)
+    for name in one.rates:
+        assert one.rates[name] == pytest.approx(other.rates[name], abs=1e-9)
+
+
+def test_the_pairwise_and_network_solvers_agree_exactly():
+    """Same economy, two independent solvers, agreement to a hundredth of a
+    basis point rather than to fifty."""
+    from moirai.engine.financial.network import SpilloverMatrix, network_nash
+
+    matrix = SpilloverMatrix(
+        names=(FED.name, RBI.name),
+        demand=np.array([[0.0, 0.25], [0.25, 0.0]]),
+        exchange=np.array([[0.0, 0.30], [0.30, 0.0]]),
+        own_output_effect=1.20,
+        own_inflation_effect=0.80,
+    )
+    network = network_nash((FED, RBI), matrix)
+    pairwise = analytic_nash(FED, RBI)
+    for name in (FED.name, RBI.name):
+        assert network.rates[name] == pytest.approx(pairwise.rates[name], abs=1e-6)
+
+
+def test_a_fed_tightening_moves_the_rbi_up_from_its_current_rate():
+    """The asymmetry `check_analytic_nash.py` describes: a Fed move forces an
+    RBI response in the same direction. Before the sign fix the RBI solved
+    below its current rate under the US shock, cutting while the Fed hiked."""
+    shocked = analytic_nash(FED.model_copy(update={"current_inflation": 0.045}), RBI)
+    assert shocked.rates[FED.name] > FED.current_rate
+    assert shocked.rates[RBI.name] > RBI.current_rate
