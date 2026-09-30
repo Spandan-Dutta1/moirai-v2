@@ -74,6 +74,32 @@ IMF_SPILLOVER_SOURCE = (
 #: allocation across the other four economies is not.
 US_TO_EM_YIELD_PASSTHROUGH = 0.36
 
+#: RBI staff estimate of exchange rate pass-through to headline CPI: a 5
+#: percent rupee depreciation from baseline raises inflation by around 20
+#: basis points, so 0.04. RBI Monetary Policy Report, October 2022,
+#: scenario analysis. See ADR 019.
+RBI_EXCHANGE_RATE_PASS_THROUGH = 0.20 / 5.0
+
+#: Rupee depreciation against the dollar per 1pp Fed surprise on the day of
+#: the announcement, 2013-2023: Bauer-Swanson orthogonalised surprises and
+#: FRED's noon rupee fixing, 82 announcements, t = 2.96, placebos
+#: insignificant. scripts/check_rupee_fed_surprise.py; ADR 019.
+RUPEE_DEPRECIATION_PER_FED_POINT_ONE_DAY = 4.35
+
+#: The floor of the evidence on the Fed-to-India exchange coefficient: the
+#: one-day depreciation times the RBI's pass-through, 0.174 points of
+#: Indian inflation per point of Fed tightening. The twelve-month
+#: depreciation is imprecise but its point estimate, 10.8 percent, gives
+#: 0.43, consistent with the 0.42 the literature matrix already carries.
+#: So 0.42 is kept as the default and this is the lower end of the range
+#: the headline is reported across (ADR 019).
+#: Units: percent depreciation per point of Fed tightening, times points of
+#: inflation per percent of depreciation, gives points of inflation per
+#: point of Fed tightening, the unit of every exchange cell.
+FED_TO_INDIA_EXCHANGE_FLOOR = (
+    RUPEE_DEPRECIATION_PER_FED_POINT_ONE_DAY * RBI_EXCHANGE_RATE_PASS_THROUGH
+)
+
 #: The literature on the global financial cycle documents that flexible
 #: exchange rates do not insulate emerging markets from US monetary policy
 #: surprises, and India is repeatedly identified as among the most exposed
@@ -182,6 +208,27 @@ class SpilloverMatrix(BaseModel):
             raise EngineError(
                 f"{name!r} is not in this network; have {list(self.names)}"
             ) from None
+
+    def with_exchange(self, receiver: str, sender: str, value: float) -> SpilloverMatrix:
+        """A copy with one exchange rate cell replaced, for sensitivity analysis.
+
+        Only the named cell changes, so a result can be bounded on the one
+        coefficient the evidence speaks to without disturbing the rest of
+        the matrix (ADR 019).
+        """
+        if value < 0 or not np.isfinite(value):
+            raise EngineError(f"an exchange coefficient must be non-negative, got {value}")
+        i, j = self.index_of(receiver), self.index_of(sender)
+        if i == j:
+            raise EngineError("the diagonal is the own effect, not an exchange spillover")
+        exchange = np.array(self.exchange, dtype=float)
+        exchange[i, j] = value
+        return self.model_copy(
+            update={
+                "exchange": exchange,
+                "note": f"{self.note} exchange[{receiver}, {sender}] set to {value:.3f}".strip(),
+            }
+        )
 
     @property
     def is_symmetric(self) -> bool:

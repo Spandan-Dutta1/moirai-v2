@@ -56,7 +56,11 @@ from moirai.engine.financial.commercial_banks import (
     INDIAN_BANKING_SYSTEM,
     OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH,
 )
-from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix
+from moirai.engine.financial.network import (
+    DEFAULT_TIERS,
+    FED_TO_INDIA_EXCHANGE_FLOOR,
+    SpilloverMatrix,
+)
 from moirai.engine.scenarios import HEADLINE_SCENARIO, run_scenario
 
 configure_logging("WARNING")
@@ -294,44 +298,67 @@ for q in range(5):
     )
 print(f"\n  additional job losses: {result.extra_job_losses:,}")
 
-# The aggregate depends on how much of the move reaches savers, and the
-# deposit mechanism failed its held-out test (ADR 009): it predicts 31
-# percent where 97 was observed. So the aggregate is reported at both,
-# and the spread alongside it, to show which of the two numbers the
-# failure can move (ADR 018).
+# Two inputs the evidence bounds but does not pin down, each reported at
+# both ends rather than at one. Deposit pass-through: the mechanism predicts
+# 31 percent where 97 was observed (ADRs 009, 018). The Fed-to-India
+# exchange coefficient: 0.42 by default, consistent with the rupee's
+# twelve-month response to Fed surprises, against a floor of 0.17 from its
+# one-day response (ADR 019).
 observed_banks = banks.model_copy(
     update={"deposit_pass_through_override": OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH}
 )
-bounded = run_scenario(
-    scenario,
-    central_banks,
-    spillovers,
-    irf,
-    shock_name="fedfunds_shock",
-    rate_variable="fedfunds",
-    price_variable="cpiaucsl",
-    output_variable="indpro",
-    population=population,
-    banking_system=observed_banks,
-    diagnostics=report,
-    calibration_loss=calibration.loss(),
-)
-mechanism_share = banks.weighted_deposit_pass_through(tightening=True)
+exchange_floor = spillovers.with_exchange(RBI.name, FED.name, FED_TO_INDIA_EXCHANGE_FLOOR)
+exchange_default = spillovers.exchange[
+    spillovers.index_of(RBI.name), spillovers.index_of(FED.name)
+]
 
-print("\n  deposit pass-through       aggregate    savers    spread")
-print(f"    mechanism        {mechanism_share:>4.0%}   "
-      f"{result.aggregate_consumption_change * 100:>+8.3f}%"
-      f"  {result.saver_change * 100:>+7.3f}%  {result.spread * 100:>6.2f}pp")
-print(f"    observed 2022-24 {OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH:>4.0%}   "
-      f"{bounded.aggregate_consumption_change * 100:>+8.3f}%"
-      f"  {bounded.saver_change * 100:>+7.3f}%  {bounded.spread * 100:>6.2f}pp")
+
+def headline_with(spill, banking):
+    return run_scenario(
+        scenario,
+        central_banks,
+        spill,
+        irf,
+        shock_name="fedfunds_shock",
+        rate_variable="fedfunds",
+        price_variable="cpiaucsl",
+        output_variable="indpro",
+        population=population,
+        banking_system=banking,
+        diagnostics=report,
+        calibration_loss=calibration.loss(),
+    )
+
+
+mechanism_share = banks.weighted_deposit_pass_through(tightening=True)
+rows = [
+    (f"as reported (exchange {exchange_default:.2f}, deposits {mechanism_share:.0%})", result),
+    (f"deposits as observed 2022-24 ({OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH:.0%})",
+     headline_with(spillovers, observed_banks)),
+    (f"exchange at the evidence floor ({FED_TO_INDIA_EXCHANGE_FLOOR:.2f})",
+     headline_with(exchange_floor, banks)),
+    ("both", headline_with(exchange_floor, observed_banks)),
+]
+
+print("\n  THE HEADLINE ACROSS WHAT THE EVIDENCE ALLOWS")
+print(f"  {'':<46} {'RBI caused':>10} {'aggregate':>10} {'savers':>9} {'spread':>8}")
+for label, run in rows:
+    print(
+        f"  {label:<46} {run.shock.deviation_bp:>+8.1f}bp "
+        f"{run.aggregate_consumption_change * 100:>+9.3f}%"
+        f" {run.saver_change * 100:>+8.3f}% {run.spread * 100:>6.2f}pp"
+    )
+spreads = [run.spread * 100 for _, run in rows]
 print()
-print("  The deposit mechanism failed its held-out test (ADR 009), so the")
-print("  aggregate is reported across it rather than at it. The spread is the")
-print("  headline because it is the number that failure moves least: it is")
-print("  carried by what floating-rate borrowers pay. A representative")
-print("  household nets the transfer to the aggregate and concludes the")
-print("  spillover barely matters. The transfer is the finding.")
+print(f"  spread range: {max(spreads):.2f} to {min(spreads):.2f} percentage points")
+print()
+print("  Deposit pass-through moves the aggregate and the savers, not the spread:")
+print("  the spread is carried by what floating-rate borrowers pay. The exchange")
+print("  coefficient moves everything, because it sets how much of the Fed's move")
+print("  the RBI imports. The one-day rupee response to Fed surprises puts a floor")
+print("  under it; the twelve-month response is consistent with the default but")
+print("  too noisy to confirm. So the finding is a range, and the transfer from")
+print("  borrowers to savers is its shape at every point in it.")
 
 
 # ----------------------------------------------------------- comparison
@@ -384,6 +411,8 @@ print(f"  shock size        : {result.shock.scale:.2f} standard deviations, "
 print(f"  spillover matrix  : {spillovers.confidence.value}")
 print(f"  deposit pass-thru : mechanism {mechanism_share:.0%}, bounded at the observed "
       f"{OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH:.0%} (ADR 009, 018)")
+print(f"  Fed-India exchange: {exchange_default:.2f}, bounded at the evidence floor "
+      f"{FED_TO_INDIA_EXCHANGE_FLOOR:.2f} (ADR 019)")
 print(f"  banking system    : {len(banks.banks)} banks, "
       f"pass-through calibrated to RBI bulletin figures")
 print(f"  population seed   : {population.parameters.seed}")
@@ -393,4 +422,4 @@ print(f"  unsourced targets : "
       f" of {len(calibration.results)}")
 print()
 print("  Results depending on unsourced calibration targets are provisional.")
-print("  See docs/decisions/0005-calibration-provenance.md, 0016 and 0018.")
+print("  See docs/decisions/0005-calibration-provenance.md, 0016, 0018 and 0019.")

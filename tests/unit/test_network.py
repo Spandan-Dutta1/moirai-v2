@@ -560,3 +560,80 @@ def test_all_banks_at_target_produce_small_moves():
     equilibrium = network_nash(at_target, spillovers)
     moves = equilibrium.moves_bp({b.name: b for b in at_target})
     assert max(abs(v) for v in moves.values()) < 200
+
+
+# --- bounding the headline on the Fed-to-India exchange coefficient (ADR 019) --
+
+
+def test_the_exchange_floor_is_the_one_day_evidence_times_rbi_pass_through():
+    from moirai.engine.financial.network import (
+        FED_TO_INDIA_EXCHANGE_FLOOR,
+        RBI_EXCHANGE_RATE_PASS_THROUGH,
+        RUPEE_DEPRECIATION_PER_FED_POINT_ONE_DAY,
+    )
+
+    assert pytest.approx(0.04) == RBI_EXCHANGE_RATE_PASS_THROUGH
+    assert pytest.approx(4.35) == RUPEE_DEPRECIATION_PER_FED_POINT_ONE_DAY
+    assert pytest.approx(0.174) == FED_TO_INDIA_EXCHANGE_FLOOR
+
+
+def test_the_floor_sits_below_the_literature_default():
+    """The default stays at the upper end of the evidence range; the floor
+    is the lower end. If the default ever fell below the floor, the range
+    the headline is reported across would be inverted."""
+    from moirai.engine.financial.network import FED_TO_INDIA_EXCHANGE_FLOOR
+
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    i, j = matrix.index_of("Reserve Bank of India"), matrix.index_of("Federal Reserve")
+    assert matrix.exchange[i, j] > FED_TO_INDIA_EXCHANGE_FLOOR
+
+
+def test_with_exchange_changes_only_the_named_cell():
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    bounded = matrix.with_exchange("Reserve Bank of India", "Federal Reserve", 0.174)
+    i, j = matrix.index_of("Reserve Bank of India"), matrix.index_of("Federal Reserve")
+    assert bounded.exchange[i, j] == pytest.approx(0.174)
+    changed = np.argwhere(~np.isclose(np.asarray(bounded.exchange), np.asarray(matrix.exchange)))
+    assert [tuple(c) for c in changed] == [(i, j)]
+    assert np.array_equal(np.asarray(bounded.demand), np.asarray(matrix.demand))
+
+
+def test_with_exchange_leaves_the_original_untouched():
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    before = np.array(matrix.exchange, dtype=float)
+    matrix.with_exchange("Reserve Bank of India", "Federal Reserve", 0.0)
+    assert np.array_equal(np.asarray(matrix.exchange), before)
+
+
+@pytest.mark.parametrize(
+    ("receiver", "sender", "value"),
+    [
+        ("Reserve Bank of India", "Federal Reserve", -0.1),
+        ("Reserve Bank of India", "Reserve Bank of India", 0.2),
+        ("Reserve Bank of Nowhere", "Federal Reserve", 0.2),
+    ],
+)
+def test_with_exchange_rejects_what_it_cannot_mean(receiver, sender, value):
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    with pytest.raises(EngineError):
+        matrix.with_exchange(receiver, sender, value)
+
+
+def test_a_lower_exchange_coefficient_shrinks_the_rbis_imported_move():
+    """The direction ADR 019's range relies on: less pass-through from the
+    Fed, less for the RBI to lean against."""
+    from moirai.engine.financial.network import FED_TO_INDIA_EXCHANGE_FLOOR
+
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    floor = matrix.with_exchange(
+        "Reserve Bank of India", "Federal Reserve", FED_TO_INDIA_EXCHANGE_FLOOR
+    )
+    shocked_fed = FED.model_copy(update={"current_inflation": 0.045})
+
+    def caused(spill):
+        banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+        shocked = tuple(shocked_fed if b.name == FED.name else b for b in banks)
+        with_shock = network_nash(shocked, spill).rates[RBI.name]
+        return with_shock - network_nash(banks, spill).rates[RBI.name]
+
+    assert 0 < caused(floor) < caused(matrix)
