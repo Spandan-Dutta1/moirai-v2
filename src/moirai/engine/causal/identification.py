@@ -23,6 +23,8 @@ which is what ordering_sensitivity does.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from datetime import date
 from enum import StrEnum
 from itertools import permutations
 from typing import Any
@@ -49,6 +51,9 @@ class IdentificationScheme(StrEnum):
     SIGN_RESTRICTIONS = "sign_restrictions"
     #: Caller supplied B directly. Provenance depends on the caller.
     EXTERNAL = "external"
+    #: External instrument (proxy SVAR). Identifies one shock; see
+    #: identify_proxy.
+    PROXY = "proxy"
 
 
 class Sign(StrEnum):
@@ -554,3 +559,183 @@ def identify_external(
         shock_names=shock_names,
         assumptions=assumptions,
     )
+
+
+# ---- external instrument (proxy SVAR) --------------------------------------
+
+
+#: Below this first-stage F statistic an instrument is conventionally weak
+#: (Stock and Yogo 2005; Montiel Olea and Pflueger 2013 give a comparable
+#: threshold for robust statistics). Reported, never used to decide silently.
+WEAK_INSTRUMENT_F = 10.0
+
+
+class ProxyFirstStage(BaseModel):
+    """How strongly the instrument moves the policy residual.
+
+    The whole identification rests on the instrument being correlated with
+    the policy shock (relevance) and with no other shock (exogeneity).
+    Exogeneity cannot be tested. Relevance can, and this is that test.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instrument: str
+    policy_variable: str
+    n_overlap: int = Field(description="Residual rows with an instrument value.")
+    coefficient: float = Field(description="Policy residual on instrument, OLS.")
+    f_statistic: float = Field(description="Heteroskedasticity-robust (HC1) F.")
+    correlation: float
+    start: date | None = None
+    end: date | None = None
+
+    @property
+    def is_weak(self) -> bool:
+        return self.f_statistic < WEAK_INSTRUMENT_F
+
+    def to_ledger_dict(self) -> dict[str, Any]:
+        return {
+            "instrument": self.instrument,
+            "policy_variable": self.policy_variable,
+            "n_overlap": self.n_overlap,
+            "coefficient": round(self.coefficient, 8),
+            "f_statistic": round(self.f_statistic, 4),
+            "correlation": round(self.correlation, 6),
+            "is_weak": self.is_weak,
+            "start": str(self.start) if self.start else None,
+            "end": str(self.end) if self.end else None,
+        }
+
+
+def identify_proxy(
+    var: VARResult,
+    instrument: Mapping[date, float],
+    policy_variable: str,
+    *,
+    instrument_name: str = "instrument",
+    shock_name: str | None = None,
+) -> tuple[StructuralModel, ProxyFirstStage]:
+    """Identify the policy shock with an external instrument.
+
+    Stock and Watson (2012, 2018) and Mertens and Ravn (2013). If an
+    instrument z is correlated with the policy shock and with no other
+    structural shock, then E[u z] is proportional to the policy column b of
+    B, so the column is identified up to scale without any ordering
+    assumption. The scale is fixed by giving the shock unit variance,
+    b = s / sqrt(s' Sigma^-1 s) with s = E[u z], and its sign so that the
+    policy variable rises.
+
+    Only that one column is identified. The other columns are completed
+    with an orthonormal basis so that B B' = Sigma holds and every tool
+    built on StructuralModel still works, but they are named
+    `unidentified_*` and carry no economic meaning.
+
+    The instrument is matched to residual rows by date through
+    `var.periods`, so the VAR must be estimated with periods. Rows without
+    an instrument value are left out of the moment E[u z].
+
+    Returns the model and the first stage, which reports whether the
+    instrument is strong enough to trust. A weak instrument is reported,
+    not refused: whether to use the result is the caller's decision.
+    """
+    if not var.periods:
+        raise EngineError("proxy identification needs the VAR's periods to match the instrument")
+    policy = var.index_of(policy_variable)
+
+    rows = [i for i, period in enumerate(var.periods) if period in instrument]
+    if len(rows) < 20:
+        raise EngineError(
+            f"only {len(rows)} residual rows have an instrument value; need at least 20"
+        )
+    u = var.residuals[rows]
+    z = np.array([instrument[var.periods[i]] for i in rows], dtype=float)
+    if np.allclose(z, z[0]):
+        raise EngineError("the instrument is constant over the overlap")
+
+    z_centred = z - z.mean()
+    u_centred = u - u.mean(axis=0)
+    s = u_centred.T @ z_centred / len(z)
+
+    sigma = var.sigma_u
+    scale_sq = float(s @ np.linalg.solve(sigma, s))
+    if scale_sq <= 0:
+        raise EngineError("the instrument is uncorrelated with every residual")
+    b = s / np.sqrt(scale_sq)
+    if b[policy] < 0:
+        b = -b
+
+    # Complete B so that B B' = Sigma with b as the policy column.
+    try:
+        lower = np.linalg.cholesky(sigma)
+    except np.linalg.LinAlgError as err:
+        raise EngineError("residual covariance is not positive definite") from err
+    q1 = np.linalg.solve(lower, b)
+    basis, _ = np.linalg.qr(np.column_stack([q1, np.eye(var.n_variables)]))
+    basis = basis[:, : var.n_variables]
+    if basis[:, 0] @ q1 < 0:
+        basis[:, 0] = -basis[:, 0]
+    completed = lower @ basis
+
+    # Put the identified column where the policy variable sits.
+    order = [None] * var.n_variables
+    order[policy] = 0
+    others = iter(range(1, var.n_variables))
+    for k in range(var.n_variables):
+        if order[k] is None:
+            order[k] = next(others)
+    impact = completed[:, order]
+
+    shocks = np.linalg.solve(impact, var.residuals.T).T
+    policy_name = shock_name or f"{policy_variable}_shock"
+    names = tuple(
+        policy_name if k == policy else f"unidentified_{k}" for k in range(var.n_variables)
+    )
+
+    # First stage: the policy residual on the instrument, robust F.
+    import statsmodels.api as sm
+
+    fit = sm.OLS(u[:, policy], sm.add_constant(z)).fit(cov_type="HC1")
+    first_stage = ProxyFirstStage(
+        instrument=instrument_name,
+        policy_variable=policy_variable,
+        n_overlap=len(rows),
+        coefficient=float(fit.params[1]),
+        f_statistic=float(fit.tvalues[1] ** 2),
+        correlation=float(np.corrcoef(u[:, policy], z)[0, 1]),
+        start=var.periods[rows[0]],
+        end=var.periods[rows[-1]],
+    )
+
+    model = StructuralModel(
+        var=var,
+        scheme=IdentificationScheme.PROXY,
+        impact=impact,
+        shocks=shocks,
+        shock_names=names,
+        assumptions=(
+            f"External instrument {instrument_name!r} is correlated with the "
+            f"{policy_variable} shock and with no other structural shock. Relevance "
+            f"is tested (first-stage F {first_stage.f_statistic:.1f} over "
+            f"{first_stage.n_overlap} months); exogeneity is not testable. Only the "
+            f"policy shock is identified; the other columns are an arbitrary "
+            f"completion."
+        ),
+    )
+
+    log.info(
+        "identified_proxy",
+        instrument=instrument_name,
+        policy_variable=policy_variable,
+        n_overlap=len(rows),
+        first_stage_f=round(first_stage.f_statistic, 2),
+        reconstruction_error=round(model.reconstruction_error(), 12),
+    )
+    if first_stage.is_weak:
+        log.warning(
+            "weak_instrument",
+            instrument=instrument_name,
+            first_stage_f=round(first_stage.f_statistic, 2),
+            threshold=WEAK_INSTRUMENT_F,
+        )
+    return model, first_stage
+

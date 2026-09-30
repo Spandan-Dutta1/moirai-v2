@@ -7,6 +7,8 @@ assumption is *defensible* is an economic question no test can settle,
 which is why the assumption is carried in the result rather than hidden.
 """
 
+from typing import NamedTuple
+
 import numpy as np
 import pytest
 
@@ -500,3 +502,117 @@ def test_identification_does_not_mutate_the_var(var):
     identify_cholesky(var, ordering=tuple(reversed(NAMES)))
     identify_sign_restrictions(var, CONTRACTIONARY, SHOCKS, n_draws=200)
     assert np.array_equal(var.sigma_u, before)
+
+
+# --- external instrument (proxy SVAR), F10 ------------------------------------
+
+
+class _ProxyWorld(NamedTuple):
+    var: object
+    instrument: dict
+    true_impact: np.ndarray
+    data: np.ndarray
+    periods: tuple
+
+
+def _proxy_world(noise: float = 0.5, n: int = 600, seed: int = 7) -> _ProxyWorld:
+    """A VAR(1) with a known impact matrix and an instrument for shock 3.
+
+    The instrument is the true policy shock plus independent noise, so it
+    is relevant and exogenous by construction and the true column is known.
+    """
+    from datetime import date as _date
+
+    from moirai.engine.causal.var import estimate_var
+
+    rng = np.random.default_rng(seed)
+    true_impact = np.array([[1.0, 0.0, -0.3], [0.4, 0.8, 0.2], [0.3, 0.5, 0.9]])
+    a1 = np.array([[0.5, 0.1, -0.1], [0.0, 0.4, 0.1], [0.1, 0.1, 0.6]])
+    eps = rng.standard_normal((n, 3))
+    y = np.zeros((n, 3))
+    for t in range(1, n):
+        y[t] = a1 @ y[t - 1] + true_impact @ eps[t]
+    periods = tuple(_date(1950 + m // 12, m % 12 + 1, 1) for m in range(n))
+    var = estimate_var(y, ("output", "prices", "rate"), n_lags=1, periods=periods)
+    z = eps[:, 2] + noise * rng.standard_normal(n)
+    instrument = {periods[t]: float(z[t]) for t in range(n)}
+    return _ProxyWorld(var, instrument, true_impact, y, periods)
+
+
+def test_proxy_recovers_the_true_policy_column():
+    from moirai.engine.causal.identification import identify_proxy
+
+    var, instrument, true_impact, _, _ = _proxy_world()
+    model, first = identify_proxy(var, instrument, "rate")
+    column = model.impact[:, var.index_of("rate")]
+    assert np.allclose(column, true_impact[:, 2], atol=0.15)
+    assert not first.is_weak
+
+
+def test_proxy_reproduces_the_covariance():
+    from moirai.engine.causal.identification import identify_proxy
+
+    var, instrument, _, _, _ = _proxy_world()
+    model, _ = identify_proxy(var, instrument, "rate")
+    assert model.reconstruction_error() < 1e-10
+
+
+def test_proxy_names_only_the_policy_shock():
+    from moirai.engine.causal.identification import IdentificationScheme, identify_proxy
+
+    var, instrument, _, _, _ = _proxy_world()
+    model, _ = identify_proxy(var, instrument, "rate")
+    assert model.scheme is IdentificationScheme.PROXY
+    assert model.shock_names[var.index_of("rate")] == "rate_shock"
+    assert all(name.startswith("unidentified_") for name in model.shock_names[:2])
+
+
+def test_the_policy_variable_rises_on_impact():
+    from moirai.engine.causal.identification import identify_proxy
+
+    var, instrument, _, _, _ = _proxy_world()
+    flipped = {d: -v for d, v in instrument.items()}
+    model, _ = identify_proxy(var, flipped, "rate")
+    assert model.impact[var.index_of("rate"), var.index_of("rate")] > 0
+
+
+def test_proxy_does_not_depend_on_the_variable_order():
+    """What Cholesky cannot offer: reordering the VAR's variables leaves the
+    identified column unchanged, because no ordering is assumed."""
+    from moirai.engine.causal.identification import identify_proxy
+    from moirai.engine.causal.var import estimate_var
+
+    world = _proxy_world()
+    var, instrument, y, periods = world.var, world.instrument, world.data, world.periods
+    model, _ = identify_proxy(var, instrument, "rate")
+    reordered = estimate_var(
+        y[:, [2, 0, 1]], ("rate", "output", "prices"), n_lags=1, periods=periods
+    )
+    other, _ = identify_proxy(reordered, instrument, "rate")
+    original_column = model.impact[:, var.index_of("rate")]
+    reordered_column = other.impact[:, reordered.index_of("rate")]
+    assert np.allclose(reordered_column[[1, 2, 0]], original_column, atol=1e-10)
+
+
+def test_a_pure_noise_instrument_is_flagged_weak():
+    from moirai.engine.causal.identification import identify_proxy
+
+    var, instrument, _, _, _ = _proxy_world()
+    rng = np.random.default_rng(99)
+    noise = {d: float(rng.standard_normal()) for d in instrument}
+    _, first = identify_proxy(var, noise, "rate")
+    assert first.is_weak
+
+
+def test_proxy_refuses_what_it_cannot_do():
+    from moirai.engine.causal.identification import identify_proxy
+
+    var, instrument, _, _, _ = _proxy_world()
+    few = dict(list(instrument.items())[:10])
+    with pytest.raises(EngineError):
+        identify_proxy(var, few, "rate")
+    constant = {d: 1.0 for d in instrument}
+    with pytest.raises(EngineError):
+        identify_proxy(var, constant, "rate")
+    with pytest.raises(EngineError):
+        identify_proxy(var, instrument, "not_a_variable")
