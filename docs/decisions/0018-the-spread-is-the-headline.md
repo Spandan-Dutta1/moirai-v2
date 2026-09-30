@@ -71,8 +71,16 @@ resting on the part that did not is reported as a range.
 - **The aggregate is not a finding.** It is between -0.02 and -0.09
   percent, and whether savers gain or lose depends on a mechanism known to
   be wrong.
-- The pipeline now prints its warnings. The Indian pipeline shows its two
-  specification warnings, which was the purpose.
+- The pipelines now print their warnings, and the first run showed why
+  that matters. The Indian pipeline shows its two specification warnings,
+  as expected. The headline VAR shows one nobody had seen: on 1985-2007,
+  log-differenced US CPI is `still_not_stationary` with verdict
+  `inconclusive`. ADF rejects a unit root (p = 0.0046) while KPSS rejects
+  stationarity, the pattern of a series drifting slowly downward, which is
+  what inflation did across the Great Moderation. The headline holds the
+  inflation channel at baseline for India (ADR 010), so the warning does
+  not reach households directly, but it is a property of an input to the
+  VAR the whole chain uses, and it had been discarded on every run.
 
 ## What did not move
 
