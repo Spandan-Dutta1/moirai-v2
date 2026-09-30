@@ -34,6 +34,7 @@ from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
 from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix, network_nash
 from moirai.engine.scenarios import (
     DEFAULT_SCENARIOS,
+    HEADLINE_SCENARIO,
     HISTORICAL_2013,
     HISTORICAL_2022,
     HISTORICAL_SCENARIOS,
@@ -779,3 +780,53 @@ def test_the_simultaneous_solver_is_approximate_when_the_band_binds(
         options={"xatol": 1e-11},
     ).x
     assert reply - rates[i] > 0.0001
+
+
+# --- the headline is the chain (ADR 016) ------------------------------------
+#
+# The pipeline used to report the Fed's own rate path, at an arbitrary two
+# standard deviations, delivered straight to Indian households. These tests
+# pin what the headline must be instead: every link solved, the RBI in
+# between, and the move measured as what the Fed caused.
+
+
+def test_the_headline_is_a_declared_scenario():
+    assert HEADLINE_SCENARIO in DEFAULT_SCENARIOS
+
+
+def test_the_headline_shock_originates_with_the_rbi():
+    """Indian households face the RBI's rate, not the Fed's."""
+    assert HEADLINE_SCENARIO.shock_origin == RBI.name
+
+
+def test_the_headline_conditions_only_the_fed():
+    """So the RBI's move is wholly imported rather than domestic."""
+    assert {c.bank for c in HEADLINE_SCENARIO.conditions} == {FED.name}
+
+
+def test_the_headline_declares_its_departures_from_the_us_transmission():
+    """The shape is the US impulse response (ADR 010); where that is not
+    credible for India, the headline says so rather than passing it on."""
+    held = {c.variable for c in HEADLINE_SCENARIO.held_channels}
+    assert MacroVariable.INFLATION in held
+    assert HEADLINE_SCENARIO.horizon_cap is not None
+
+
+def test_the_headline_shock_is_the_rbis_caused_move(population, spillovers):
+    """Measured against the same game without the US condition, so the
+    RBI's unprompted move is excluded from the shock."""
+    result = execute(HEADLINE_SCENARIO, population, spillovers)
+    caused = (
+        result.equilibrium.rates[RBI.name]
+        - result.reference_equilibrium.rates[RBI.name]
+    )
+    assert result.shock.bank == RBI.name
+    assert result.shock.deviation == pytest.approx(caused, abs=1e-12)
+
+
+def test_the_headline_needs_no_extreme_extrapolation(population, spillovers):
+    """The pipeline runs the headline without allow_extreme, so the solved
+    shock must sit inside the range the VAR sample supports."""
+    result = execute(HEADLINE_SCENARIO, population, spillovers)
+    assert not result.shock.is_extreme
+

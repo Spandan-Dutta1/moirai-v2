@@ -585,6 +585,16 @@ DEFAULT_SCENARIOS: tuple[Scenario, ...] = (
     GLOBAL_TIGHTENING,
 )
 
+#: The scenario the pipeline reports as its headline (ADR 016).
+#:
+#: It is the only declared scenario that runs every link of the chain the
+#: project exists to trace: US inflation moves the Fed, the central bank
+#: network responds, and Indian households bear the part of the RBI's move
+#: the Fed caused. Scenarios with the Fed as shock origin deliver the Fed's
+#: own path to Indian households, which skips the RBI; they answer a
+#: different question and are reported as comparisons, not as the finding.
+HEADLINE_SCENARIO: Scenario = IMPORTED_TIGHTENING
+
 # ---- a historical scenario: calendar 2022 (ADR 012) -----------------------
 #
 # The network's second out-of-sample test, after the banking layer's
@@ -792,3 +802,4 @@ HISTORICAL_SCENARIOS: tuple[tuple[Scenario, tuple[CentralBank, ...]], ...] = (
     (HISTORICAL_2022, JANUARY_2022_BANKS),
     (HISTORICAL_2013, JANUARY_2013_BANKS),
 )
+

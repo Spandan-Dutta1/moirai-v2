@@ -3,8 +3,17 @@ The complete Moirai pipeline, end to end.
 
     real data -> bitemporal storage -> stationarity -> VAR
               -> identification -> impulse responses
+              -> the Fed's move -> the central bank game -> the RBI's response
               -> macro shock path -> commercial banks
               -> heterogeneous households -> who gains and who loses
+
+The headline is the chain the project exists to trace, the declared
+HEADLINE_SCENARIO: US inflation moves the Fed, the network of central banks
+responds, and Indian households bear the part of the RBI's move the Fed
+caused. Every link is solved, not chosen. The pipeline used to feed the
+Fed's own rate path, scaled to an arbitrary two standard deviations,
+straight to Indian households; that version is kept at the end, labelled
+as what it is, so the two can be compared. See ADR 016.
 
 Every stage records what it assumed. The specification gate refuses to
 build a shock path from a VAR that failed critical diagnostics, so a
@@ -36,7 +45,16 @@ from moirai.engine.economy.shock_path import (
     build_shock_path,
     monetary_mappings,
 )
+from moirai.engine.financial.central_banks import (
+    BANK_OF_ENGLAND,
+    BANK_OF_JAPAN,
+    ECB,
+    FED,
+    RBI,
+)
 from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
+from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix
+from moirai.engine.scenarios import HEADLINE_SCENARIO, run_scenario
 
 configure_logging("ERROR")
 
@@ -47,7 +65,8 @@ START, END = "1985-01-01", "2007-06-01"
 CODES = ["INDPRO", "CPIAUCSL", "FEDFUNDS"]
 N_LAGS = 12
 HORIZON = 36
-SHOCK_SCALE = 2.0
+#: Only for the comparison at the end: the old headline's arbitrary scale.
+COMPARISON_SHOCK_SCALE = 2.0
 N_HOUSEHOLDS = 200_000
 
 
@@ -138,30 +157,78 @@ for i, name in enumerate(names):
 print("    a clearly signed effect can still be a small one")
 
 
-# ------------------------------------------------------------ the seam
-rule("SEAM  Impulse response to household-facing macro path")
+# ------------------------------------------------------------ Layer 1a
+rule("LAYER 1a  The central bank game")
 
-path = build_shock_path(
+scenario = HEADLINE_SCENARIO
+central_banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+spillovers = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+
+population = generate_population(
+    PopulationParameters(n_households=N_HOUSEHOLDS, seed=1)
+)
+calibration = evaluate(population)
+banks = INDIAN_BANKING_SYSTEM
+
+result = run_scenario(
+    scenario,
+    central_banks,
+    spillovers,
     irf,
-    "fedfunds_shock",
-    monetary_mappings("fedfunds", "cpiaucsl", "indpro"),
-    scale=SHOCK_SCALE,
+    shock_name="fedfunds_shock",
+    rate_variable="fedfunds",
+    price_variable="cpiaucsl",
+    output_variable="indpro",
+    population=population,
+    banking_system=banks,
     diagnostics=report,
-    require_usable=True,
+    calibration_loss=calibration.loss(),
 )
 
-print(f"  shock scaled to {SHOCK_SCALE} standard deviations")
-print("  gate passed: the VAR is specification-usable\n")
+print(f"  scenario: {scenario.name}")
+print(f"  {scenario.description}")
+for condition in scenario.conditions:
+    print(f"  condition: {condition.bank} inflation at {condition.inflation:.1%}")
+print(f"  spillover matrix: {spillovers.confidence.value}")
+print()
+print(f"  {'bank':<24} {'rate':>9} {'move':>9} {'unprompted':>11} {'caused':>9}")
+conditioned = {b.name: b for b in scenario.apply_to(central_banks)}
+for name, rate in result.equilibrium.rates.items():
+    current = conditioned[name].current_rate
+    reference = result.reference_equilibrium.rates[name]
+    print(
+        f"  {name:<24} {rate:>8.3%} {(rate - current) * 10_000:>+8.0f}bp "
+        f"{(reference - current) * 10_000:>+10.0f}bp "
+        f"{(rate - reference) * 10_000:>+8.0f}bp"
+    )
+print("  unprompted: the move each bank makes with no conditions at all")
+print("  caused    : the rest, what the US inflation condition produced")
+
+
+# ------------------------------------------------------------ the seam
+rule("SEAM  The RBI's caused move to a household-facing macro path")
+
+path = result.path
+print(f"  {result.shock.note}")
+print("  gate passed: the VAR is specification-usable")
+for channel in scenario.held_channels:
+    print(f"  held at baseline: {channel.variable.value}")
+if scenario.horizon_cap is not None:
+    print(f"  horizon capped at {scenario.horizon_cap.periods} months")
+print("  the shape is the US transmission, the size is the RBI's (ADR 010)\n")
 print(f"  {'period':>7}  {'policy rate':>12}  {'inflation':>11}  {'income growth':>14}")
-for period in (0, 6, 12, 24, 36):
-    values = list(path.at(period).values())
-    print(f"  {period:>7}  {values[0]:>11.3%}  {values[1]:>10.3%}  {values[2]:>13.3%}")
+for period in sorted({0, 6, 12, 24, path.horizon}):
+    values = path.at(period)
+    print(
+        f"  {period:>7}  {values[MacroVariable.POLICY_RATE]:>11.3%}  "
+        f"{values[MacroVariable.INFLATION]:>10.3%}  "
+        f"{values[MacroVariable.INCOME_GROWTH]:>13.3%}"
+    )
 
 
 # ---------------------------------------------------------------- Layer 2
 rule("LAYER 2  Commercial banks")
 
-banks = INDIAN_BANKING_SYSTEM
 print(f"  {len(banks.banks)} banks across three RBI groups\n")
 for group in sorted({b.group for b in banks.banks}, key=lambda g: g.value):
     members = banks.by_group(group)
@@ -174,15 +241,11 @@ for group in sorted({b.group for b in banks.banks}, key=lambda g: g.value):
 
 baseline_policy = path.baselines[MacroVariable.POLICY_RATE]
 peak_period, _ = path.peak(MacroVariable.POLICY_RATE)
-peak_policy = path.get(MacroVariable.POLICY_RATE)[peak_period]
+policy_move = (path.get(MacroVariable.POLICY_RATE)[peak_period] - baseline_policy) * 10_000
 
-before = banks.effective_rates(baseline_policy, baseline_policy)
-after = banks.effective_rates(peak_policy, baseline_policy)
-policy_move = (peak_policy - baseline_policy) * 10_000
-
-print(f"\n  at the peak of the shock, a {policy_move:.0f}bp policy move reaches:")
-print(f"    borrowers as {(after['lending_rate'] - before['lending_rate']) * 10_000:>5.0f}bp")
-print(f"    savers as    {(after['deposit_rate'] - before['deposit_rate']) * 10_000:>5.0f}bp")
+print(f"\n  at the peak of the path, a {policy_move:.0f}bp policy move reaches:")
+print(f"    borrowers as {result.lending_rate_change_bp:>5.0f}bp")
+print(f"    savers as    {result.deposit_rate_change_bp:>5.0f}bp")
 print("    the wedge accrues to the banking system as margin")
 print()
 print("  Pass-through is derived from each bank's external benchmark share,")
@@ -193,33 +256,18 @@ print("  RBI's published transmission figures by bank group.")
 # ---------------------------------------------------------------- Layer 3
 rule("LAYER 3  Heterogeneous Households")
 
-population = generate_population(
-    PopulationParameters(n_households=N_HOUSEHOLDS, seed=1)
-)
-calibration = evaluate(population)
-
 print(f"  {len(population):,} households, structure of arrays\n")
 print(calibration.table())
 print(f"\n  {calibration.summary()}")
 print("  parameters fitted to declared targets, not chosen")
 
-baseline, shocked = counterfactual(population, path, BehaviourParameters(), banks)
-
-base_total = np.sum([o.consumption for o in baseline], axis=0)
-shock_total = np.sum([o.consumption for o in shocked], axis=0)
-change = (shock_total - base_total) / np.maximum(base_total, 1.0)
-
-aggregate = (shock_total.sum() / base_total.sum() - 1) * 100
-extra_losses = sum(int(o.became_unemployed.sum()) for o in shocked) - sum(
-    int(o.became_unemployed.sum()) for o in baseline
-)
-
 
 # ---------------------------------------------------------------- result
-rule("RESULT  Who bears a monetary tightening?")
+rule("RESULT  Who in India bears a US tightening?")
 
-print(f"  aggregate consumption change : {aggregate:+.3f}%")
-print(f"  additional job losses        : {extra_losses:,}")
+change = result.change_by_household
+print(f"  aggregate consumption change : {result.aggregate_consumption_change * 100:+.3f}%")
+print(f"  additional job losses        : {result.extra_job_losses:,}")
 print()
 
 quintile = population.quantile_groups(population.income, 5)
@@ -243,14 +291,51 @@ for label, mask in [
         f"{int(mask.sum()):>12,}"
     )
 
-spread = change[population.is_rate_exposed].mean() - change[~population.is_indebted].mean()
 print()
-print(f"  spread between borrowers and savers: {spread * 100:.2f} percentage points")
+print(f"  spread between borrowers and savers: {result.spread * 100:.2f} percentage points")
 print()
-print("  A representative household nets these to roughly the aggregate above")
-print("  and concludes that monetary policy barely moves consumption. The")
-print("  aggregate is small because it is a transfer, and the transfer is")
-print("  the finding.")
+print("  Every link above is solved: US inflation sets the Fed's move, the")
+print("  network sets the RBI's response, the banks set what households pay.")
+print("  A representative household nets the transfer to roughly the")
+print("  aggregate and concludes the spillover barely matters. The transfer")
+print("  is the finding.")
+
+
+# ----------------------------------------------------------- comparison
+rule("FOR COMPARISON  The Fed's own path, delivered straight to households")
+
+direct_path = build_shock_path(
+    irf,
+    "fedfunds_shock",
+    monetary_mappings("fedfunds", "cpiaucsl", "indpro"),
+    scale=COMPARISON_SHOCK_SCALE,
+    diagnostics=report,
+    require_usable=True,
+)
+direct_base, direct_shock = counterfactual(
+    population, direct_path, BehaviourParameters(), banks
+)
+d_base = np.sum([o.consumption for o in direct_base], axis=0)
+d_shock = np.sum([o.consumption for o in direct_shock], axis=0)
+d_change = (d_shock - d_base) / np.maximum(d_base, 1.0)
+d_borrowers = d_change[population.is_rate_exposed].mean()
+d_savers = d_change[~population.is_indebted].mean()
+
+print(f"  the pipeline's former headline: the Fed's rate path at "
+      f"{COMPARISON_SHOCK_SCALE} standard deviations,")
+print("  a size chosen because it produced a visible response, fed to Indian")
+print("  households with no central bank game and no RBI in between\n")
+print(f"  {'':<26} {'chain':>10} {'Fed direct':>12}")
+print(f"  {'aggregate consumption':<26} {result.aggregate_consumption_change * 100:>9.3f}% "
+      f"{(d_shock.sum() / d_base.sum() - 1) * 100:>11.3f}%")
+print(f"  {'floating-rate borrowers':<26} {result.borrower_change * 100:>9.3f}% "
+      f"{d_borrowers * 100:>11.3f}%")
+print(f"  {'net savers':<26} {result.saver_change * 100:>9.3f}% {d_savers * 100:>11.3f}%")
+print(f"  {'spread (pp)':<26} {result.spread * 100:>10.2f} {(d_borrowers - d_savers) * 100:>12.2f}")
+print()
+print("  The direct version is not the chain. It skips the game and the RBI,")
+print("  so it measures what the Fed's path would do if Indian households")
+print("  faced it themselves. Read it as an upper bound, not a scenario.")
 
 
 # ---------------------------------------------------------- provenance
@@ -260,7 +345,10 @@ print("  data vintage      : fetched live, content-hashed, archived")
 print(f"  sample            : {START} to {END}, chosen on specification grounds")
 print(f"  identification    : {model.scheme.value}, ordering {' -> '.join(names)}")
 print(f"  diagnostics       : {report.is_usable} ({len(report.advisory_failures)} advisory)")
-print(f"  shock scale       : {SHOCK_SCALE} standard deviations")
+print(f"  headline scenario : {scenario.name}, shock origin {scenario.shock_origin}")
+print(f"  shock size        : {result.shock.scale:.2f} standard deviations, "
+      f"solved by the game ({result.shock.concept})")
+print(f"  spillover matrix  : {spillovers.confidence.value}")
 print(f"  banking system    : {len(banks.banks)} banks, "
       f"pass-through calibrated to RBI bulletin figures")
 print(f"  population seed   : {population.parameters.seed}")
@@ -270,4 +358,4 @@ print(f"  unsourced targets : "
       f" of {len(calibration.results)}")
 print()
 print("  Results depending on unsourced calibration targets are provisional.")
-print("  See docs/decisions/0005-calibration-provenance.md")
+print("  See docs/decisions/0005-calibration-provenance.md and 0016.")
