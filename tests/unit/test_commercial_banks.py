@@ -1,4 +1,4 @@
-﻿"""Tests for the commercial banking layer.
+"""Tests for the commercial banking layer.
 
 Two things get most of the attention.
 
@@ -436,3 +436,64 @@ def test_every_check_records_its_source(system):
     for check in validate_out_of_sample(system)["checks"]:
         assert "RBI" in check["source"]
         assert check["detail"].strip()
+
+
+
+# --- bounding results that depend on deposit pass-through (ADR 018) -----------
+
+
+def test_without_an_override_the_mechanism_is_unchanged(system):
+    assert system.deposit_pass_through_override is None
+    rebuilt = BankingSystem(banks=system.banks)
+    for tightening in (True, False):
+        assert rebuilt.weighted_deposit_pass_through(
+            tightening=tightening
+        ) == system.weighted_deposit_pass_through(tightening=tightening)
+
+
+def test_the_override_replaces_system_tightening_deposit_pass_through(system):
+    bounded = system.model_copy(update={"deposit_pass_through_override": 0.97})
+    assert bounded.weighted_deposit_pass_through(tightening=True) == 0.97
+    rates = bounded.effective_rates(0.0625, 0.0525)
+    assert rates["deposit_pass_through"] == 0.97
+
+
+def test_the_override_leaves_lending_easing_and_groups_alone(system):
+    """It stands in for one observation, a system-wide tightening figure,
+    and must not reach anything that observation does not describe."""
+    bounded = system.model_copy(update={"deposit_pass_through_override": 0.97})
+    assert bounded.weighted_lending_pass_through(
+        tightening=True
+    ) == system.weighted_lending_pass_through(tightening=True)
+    assert bounded.weighted_deposit_pass_through(
+        tightening=False
+    ) == system.weighted_deposit_pass_through(tightening=False)
+    for group in {b.group for b in system.banks}:
+        assert bounded.weighted_deposit_pass_through(
+            tightening=True, group=group
+        ) == system.weighted_deposit_pass_through(tightening=True, group=group)
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1])
+def test_the_override_must_be_a_share(system, value):
+    with pytest.raises(ValueError):
+        BankingSystem(banks=system.banks, deposit_pass_through_override=value)
+
+
+def test_the_observed_figure_is_the_held_out_one():
+    from moirai.engine.financial.commercial_banks import (
+        OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH,
+    )
+
+    assert pytest.approx(0.972) == OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH
+
+
+def test_the_mechanism_is_far_below_what_was_observed(system):
+    """The failure ADR 009 reports, kept visible: if the mechanism were
+    retuned to the held-out figure this would fail, and it should."""
+    from moirai.engine.financial.commercial_banks import (
+        OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH,
+    )
+
+    mechanism = system.weighted_deposit_pass_through(tightening=True)
+    assert mechanism < OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH - 0.5

@@ -49,7 +49,7 @@ from moirai.engine.economy.shock_path import (
 )
 
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
-configure_logging("ERROR")
+configure_logging("WARNING")
 
 # CPI Combined begins in 2012, which sets the common sample.
 START = date(2012, 1, 1)

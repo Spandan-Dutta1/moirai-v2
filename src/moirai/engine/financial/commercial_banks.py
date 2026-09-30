@@ -290,6 +290,18 @@ class BankingSystem(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     banks: tuple[CommercialBank, ...] = Field(min_length=1)
+    deposit_pass_through_override: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Replaces the system-wide deposit pass-through on tightening "
+            "moves, for sensitivity analysis. None uses the mechanism. The "
+            "mechanism failed its held-out test on deposits (ADR 009), so a "
+            "result depending on deposit pass-through should be reported "
+            "across this override as well as at the mechanism (ADR 018)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _names_are_unique(self) -> BankingSystem:
@@ -329,6 +341,19 @@ class BankingSystem(BaseModel):
     def weighted_deposit_pass_through(
         self, *, tightening: bool, group: BankGroup | None = None
     ) -> float:
+        """Deposit-weighted pass-through, for the system or for one group.
+
+        A set `deposit_pass_through_override` replaces the system-wide
+        figure on tightening moves only. Group figures and easing moves
+        keep the mechanism, since the held-out observation it stands in
+        for is a system-wide tightening figure.
+        """
+        if (
+            tightening
+            and group is None
+            and self.deposit_pass_through_override is not None
+        ):
+            return self.deposit_pass_through_override
         banks = self.banks if group is None else self.by_group(group)
         if not banks:
             raise EngineError(f"no banks in group {group}")
@@ -398,6 +423,7 @@ class BankingSystem(BaseModel):
                     self.weighted_deposit_pass_through(tightening=False), 4
                 ),
             },
+            "deposit_pass_through_override": self.deposit_pass_through_override,
             "banks": [b.to_ledger_dict() for b in self.banks],
         }
 
@@ -717,3 +743,12 @@ def validate_out_of_sample(
             "tuned against the easing cycle only."
         ),
     }
+
+
+#: Deposit pass-through observed over the tightening cycle of May 2022 to
+#: November 2024: the weighted average rate on fresh deposits rose 243bp
+#: against a 250bp repo increase (ADR 009). Held out from calibration, and
+#: the figure the mechanism's 31 percent failed to predict. Used only to
+#: bound results that depend on deposit pass-through (ADR 018).
+OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH = 243.0 / 250.0
+

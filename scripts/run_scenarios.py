@@ -23,7 +23,7 @@ from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix
 from moirai.engine.scenarios import DEFAULT_SCENARIOS, compare, run_scenario
 
 warnings.filterwarnings("ignore")
-configure_logging("ERROR")
+configure_logging("WARNING")
 
 # ---- estimate once, shared by every scenario -----------------------------
 with FredAdapter() as fred:

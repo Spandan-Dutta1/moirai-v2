@@ -52,11 +52,14 @@ from moirai.engine.financial.central_banks import (
     FED,
     RBI,
 )
-from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
+from moirai.engine.financial.commercial_banks import (
+    INDIAN_BANKING_SYSTEM,
+    OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH,
+)
 from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix
 from moirai.engine.scenarios import HEADLINE_SCENARIO, run_scenario
 
-configure_logging("ERROR")
+configure_logging("WARNING")
 
 # The Great Moderation. Chosen because the full 1960-2019 sample fails
 # specification tests: it spans the Great Inflation, the Volcker experiment
@@ -266,19 +269,8 @@ print("  parameters fitted to declared targets, not chosen")
 rule("RESULT  Who in India bears a US tightening?")
 
 change = result.change_by_household
-print(f"  aggregate consumption change : {result.aggregate_consumption_change * 100:+.3f}%")
-print(f"  additional job losses        : {result.extra_job_losses:,}")
-print()
-
-quintile = population.quantile_groups(population.income, 5)
-print(f"  {'income quintile':>16}  {'consumption':>13}  {'% rate exposed':>15}")
-for q in range(5):
-    mask = quintile == q
-    print(
-        f"  {q + 1:>16}  {change[mask].mean() * 100:>12.3f}%  "
-        f"{population.is_rate_exposed[mask].mean():>14.1%}"
-    )
-print()
+print(f"  HEADLINE  floating-rate borrowers against net savers: "
+      f"{result.spread * 100:.2f} percentage points\n")
 
 print(f"  {'by exposure':>26}  {'consumption':>13}  {'households':>12}")
 for label, mask in [
@@ -290,15 +282,56 @@ for label, mask in [
         f"  {label:>26}  {change[mask].mean() * 100:>12.3f}%  "
         f"{int(mask.sum()):>12,}"
     )
+print()
 
+quintile = population.quantile_groups(population.income, 5)
+print(f"  {'income quintile':>16}  {'consumption':>13}  {'% rate exposed':>15}")
+for q in range(5):
+    mask = quintile == q
+    print(
+        f"  {q + 1:>16}  {change[mask].mean() * 100:>12.3f}%  "
+        f"{population.is_rate_exposed[mask].mean():>14.1%}"
+    )
+print(f"\n  additional job losses: {result.extra_job_losses:,}")
+
+# The aggregate depends on how much of the move reaches savers, and the
+# deposit mechanism failed its held-out test (ADR 009): it predicts 31
+# percent where 97 was observed. So the aggregate is reported at both,
+# and the spread alongside it, to show which of the two numbers the
+# failure can move (ADR 018).
+observed_banks = banks.model_copy(
+    update={"deposit_pass_through_override": OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH}
+)
+bounded = run_scenario(
+    scenario,
+    central_banks,
+    spillovers,
+    irf,
+    shock_name="fedfunds_shock",
+    rate_variable="fedfunds",
+    price_variable="cpiaucsl",
+    output_variable="indpro",
+    population=population,
+    banking_system=observed_banks,
+    diagnostics=report,
+    calibration_loss=calibration.loss(),
+)
+mechanism_share = banks.weighted_deposit_pass_through(tightening=True)
+
+print("\n  deposit pass-through       aggregate    savers    spread")
+print(f"    mechanism        {mechanism_share:>4.0%}   "
+      f"{result.aggregate_consumption_change * 100:>+8.3f}%"
+      f"  {result.saver_change * 100:>+7.3f}%  {result.spread * 100:>6.2f}pp")
+print(f"    observed 2022-24 {OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH:>4.0%}   "
+      f"{bounded.aggregate_consumption_change * 100:>+8.3f}%"
+      f"  {bounded.saver_change * 100:>+7.3f}%  {bounded.spread * 100:>6.2f}pp")
 print()
-print(f"  spread between borrowers and savers: {result.spread * 100:.2f} percentage points")
-print()
-print("  Every link above is solved: US inflation sets the Fed's move, the")
-print("  network sets the RBI's response, the banks set what households pay.")
-print("  A representative household nets the transfer to roughly the")
-print("  aggregate and concludes the spillover barely matters. The transfer")
-print("  is the finding.")
+print("  The deposit mechanism failed its held-out test (ADR 009), so the")
+print("  aggregate is reported across it rather than at it. The spread is the")
+print("  headline because it is the number that failure moves least: it is")
+print("  carried by what floating-rate borrowers pay. A representative")
+print("  household nets the transfer to the aggregate and concludes the")
+print("  spillover barely matters. The transfer is the finding.")
 
 
 # ----------------------------------------------------------- comparison
@@ -349,6 +382,8 @@ print(f"  headline scenario : {scenario.name}, shock origin {scenario.shock_orig
 print(f"  shock size        : {result.shock.scale:.2f} standard deviations, "
       f"solved by the game ({result.shock.concept})")
 print(f"  spillover matrix  : {spillovers.confidence.value}")
+print(f"  deposit pass-thru : mechanism {mechanism_share:.0%}, bounded at the observed "
+      f"{OBSERVED_TIGHTENING_DEPOSIT_PASS_THROUGH:.0%} (ADR 009, 018)")
 print(f"  banking system    : {len(banks.banks)} banks, "
       f"pass-through calibrated to RBI bulletin figures")
 print(f"  population seed   : {population.parameters.seed}")
@@ -358,4 +393,4 @@ print(f"  unsourced targets : "
       f" of {len(calibration.results)}")
 print()
 print("  Results depending on unsourced calibration targets are provisional.")
-print("  See docs/decisions/0005-calibration-provenance.md and 0016.")
+print("  See docs/decisions/0005-calibration-provenance.md, 0016 and 0018.")
