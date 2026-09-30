@@ -604,3 +604,35 @@ def test_pass_through_is_no_longer_a_household_parameter():
 def test_invalid_parameters_are_rejected(field, value):
     with pytest.raises(Exception):
         BehaviourParameters(**{field: value})
+
+
+# --- where the MPC endpoints come from (ADR 017) ------------------------------
+
+
+def test_the_high_liquidity_mpc_is_the_sourced_value():
+    """The default was 0.10, which no source supported, while the project's
+    records described it as sourced. Fagereng, Holm and Natvik (2021) put
+    the within-year MPC of high-liquidity winners slightly below one-half."""
+    from moirai.engine.economy.behaviour import FHN_2021, MPC_HIGH_LIQUIDITY_FHN
+
+    assert BehaviourParameters().mpc_high_wealth == MPC_HIGH_LIQUIDITY_FHN == 0.45
+    assert "Fagereng" in FHN_2021
+
+
+def test_the_hand_to_mouth_mpc_is_declared_as_an_assumption():
+    from moirai.engine.economy.behaviour import MPC_LOW_LIQUIDITY_ASSUMED
+
+    assert BehaviourParameters().mpc_low_wealth == MPC_LOW_LIQUIDITY_ASSUMED
+
+
+def test_the_mpc_gradient_still_runs_from_hand_to_mouth_to_liquid():
+    """Liquid households spend a smaller share than hand-to-mouth ones.
+    Raising the high endpoint must not invert that."""
+    defaults = BehaviourParameters()
+    assert defaults.mpc_low_wealth > defaults.mpc_high_wealth
+
+
+def test_the_mpc_fields_say_where_they_come_from():
+    fields = BehaviourParameters.model_fields
+    assert "Fagereng" in (fields["mpc_high_wealth"].description or "")
+    assert "Assumed" in (fields["mpc_low_wealth"].description or "")

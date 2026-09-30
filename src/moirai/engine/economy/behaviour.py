@@ -56,27 +56,62 @@ log = get_logger(__name__)
 FALLBACK_LENDING_SPREAD = 0.030
 FALLBACK_DEPOSIT_SPREAD = 0.015
 
+#: The source for the high-liquidity end of the MPC gradient (ADR 017).
+FHN_2021 = (
+    "Fagereng, Holm and Natvik (2021), MPC Heterogeneity and Household "
+    "Balance Sheets, American Economic Journal: Macroeconomics 13(4), 1-54"
+)
+
+#: Within-year MPC of high-liquidity winners of large lottery prizes in
+#: Norwegian administrative data. The abstract reports it as "slightly below
+#: one-half"; 0.45 is that reading. It is a lower bound for this model in two
+#: respects: the shocks here are persistent changes in debt service and
+#: interest income rather than one-off windfalls, and Indian households have
+#: thinner access to credit than Norwegian ones. Both push MPCs up.
+MPC_HIGH_LIQUIDITY_FHN = 0.45
+
+#: The hand-to-mouth end is not taken from the same source. FHN estimate that
+#: low-liquidity winners of the smallest prizes spend all of it within the
+#: year, an MPC of one. The model applies this endpoint to every shock a
+#: hand-to-mouth household receives, not only to small windfalls, so it
+#: stays at 0.70, below the source, as an assumption. ADR 017 reports how
+#: the headline moves across 0.70 to 1.0.
+MPC_LOW_LIQUIDITY_ASSUMED = 0.70
+
 
 class BehaviourParameters(BaseModel):
     """Calibration for household decision rules.
 
-    Defaults are drawn from the empirical MPC literature, where estimates
-    for low-liquidity households cluster around 0.6 to 0.8 and for high
-    wealth households around 0.05 to 0.15. The gradient matters more than
-    the level: it is what makes the identity of the affected household
-    determine the aggregate response.
+    The high-liquidity end of the MPC gradient is sourced from Fagereng,
+    Holm and Natvik (2021): even wealthy, liquid households spend slightly
+    below half of a windfall within the year. The hand-to-mouth end is an
+    assumption set below that source (see MPC_LOW_LIQUIDITY_ASSUMED). The
+    gradient matters more than the level: it is what makes the identity of
+    the affected household determine the aggregate response.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # ---- consumption ----
     mpc_low_wealth: float = Field(
-        default=0.70,
+        default=MPC_LOW_LIQUIDITY_ASSUMED,
         gt=0.0,
         le=1.0,
-        description="Marginal propensity to consume for hand-to-mouth households.",
+        description=(
+            "Marginal propensity to consume for hand-to-mouth households. "
+            "Assumed, below the source's estimate of one; see ADR 017."
+        ),
     )
-    mpc_high_wealth: float = Field(default=0.10, gt=0.0, le=1.0)
+    mpc_high_wealth: float = Field(
+        default=MPC_HIGH_LIQUIDITY_FHN,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Marginal propensity to consume for households with ample liquid "
+            "wealth. Sourced: Fagereng, Holm and Natvik (2021). Was 0.10, "
+            "which no source supported; see ADR 017."
+        ),
+    )
     mpc_wealth_scale: float = Field(
         default=0.5,
         gt=0.0,
