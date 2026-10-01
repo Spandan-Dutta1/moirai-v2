@@ -43,6 +43,7 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
+from moirai.core.exceptions import EngineError
 from moirai.core.logging import get_logger
 from moirai.engine.economy.households import EmploymentStatus, Population
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath
@@ -506,3 +507,39 @@ def counterfactual(
     _, baseline_outcomes = simulate(population, baseline_path, parameters, banks)
     _, shocked_outcomes = simulate(population, shocked, parameters, banks)
     return baseline_outcomes, shocked_outcomes
+
+
+# ---- measuring a group's response (ADR 024) --------------------------------
+
+
+def total_consumption(outcomes: list[PeriodOutcome]) -> np.ndarray:
+    """Each household's consumption summed over the simulated periods."""
+    return np.sum([o.consumption for o in outcomes], axis=0)
+
+
+def group_change(baseline: np.ndarray, shocked: np.ndarray, members: np.ndarray) -> float:
+    """A group's proportional change in consumption: the change in its total.
+
+    The average of each member's own proportional change is not a usable
+    group measure here. Households whose debt service exceeds their income
+    consume nothing, and one whose consumption rises from nearly nothing
+    posts a change of thousands of percent that swamps the average. A 13bp
+    rate cut produced a 13 percent average rise in floating-rate borrowers'
+    consumption that way, twenty times the effect of the matching rise.
+    The ratio of totals weights each household by what it consumes and has
+    no small denominators, which is the standard way to report a group.
+    """
+    base = float(baseline[members].sum())
+    if base <= 0:
+        raise EngineError("the group consumes nothing in the baseline; its change is undefined")
+    return float(shocked[members].sum()) / base - 1.0
+
+
+def never_consuming(outcomes: list[PeriodOutcome]) -> np.ndarray:
+    """Households with zero consumption in every period, as a boolean mask.
+
+    These are households whose debt service exceeds their income throughout.
+    Reported alongside every result, since they carry no weight in a group
+    total but would dominate an average of proportional changes.
+    """
+    return np.all(np.array([o.consumption for o in outcomes]) <= 0.0, axis=0)

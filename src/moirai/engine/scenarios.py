@@ -38,7 +38,12 @@ from moirai.core.exceptions import EngineError
 from moirai.core.logging import get_logger
 from moirai.engine.causal.diagnostics import DiagnosticReport
 from moirai.engine.causal.irf import ImpulseResponse
-from moirai.engine.economy.behaviour import BehaviourParameters, counterfactual
+from moirai.engine.economy.behaviour import (
+    BehaviourParameters,
+    counterfactual,
+    group_change,
+    never_consuming,
+)
 from moirai.engine.economy.households import Population
 from moirai.engine.economy.policy_shock import PolicyShock, mappings_for_bank, path_from_game
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath
@@ -218,6 +223,20 @@ class ScenarioResult(BaseModel):
     fixed_borrower_change: float
     saver_change: float
 
+    # Group changes measured as the change in each group's total
+    # consumption (ADR 024). Reported beside the figures above, which are
+    # averages of household proportional changes and are kept unchanged.
+    borrower_change_total: float | None = None
+    fixed_borrower_change_total: float | None = None
+    saver_change_total: float | None = None
+    households_never_consuming: int | None = None
+    baseline_consumption: Any = Field(
+        default=None, description="(n,) each household's total baseline consumption."
+    )
+    shocked_consumption: Any = Field(
+        default=None, description="(n,) each household's total shocked consumption."
+    )
+
     lending_rate_change_bp: float
     deposit_rate_change_bp: float
 
@@ -228,6 +247,13 @@ class ScenarioResult(BaseModel):
     def spread(self) -> float:
         """The transfer a representative household averages away."""
         return self.borrower_change - self.saver_change
+
+    @property
+    def spread_total(self) -> float | None:
+        """The same spread, from changes in group totals (ADR 024)."""
+        if self.borrower_change_total is None or self.saver_change_total is None:
+            return None
+        return self.borrower_change_total - self.saver_change_total
 
     @property
     def bank_wedge_bp(self) -> float:
@@ -249,6 +275,10 @@ class ScenarioResult(BaseModel):
                 "fixed_borrower_change": round(self.fixed_borrower_change, 6),
                 "saver_change": round(self.saver_change, 6),
                 "spread": round(self.spread, 6),
+                "spread_total": (
+                    round(self.spread_total, 6) if self.spread_total is not None else None
+                ),
+                "households_never_consuming": self.households_never_consuming,
                 "lending_rate_change_bp": round(self.lending_rate_change_bp, 1),
                 "deposit_rate_change_bp": round(self.deposit_rate_change_bp, 1),
                 "bank_wedge_bp": round(self.bank_wedge_bp, 1),
@@ -359,6 +389,14 @@ def run_scenario(
             change[population.is_indebted & ~population.debt_is_floating].mean()
         ),
         saver_change=float(change[~population.is_indebted].mean()),
+        borrower_change_total=group_change(base_total, shock_total, population.is_rate_exposed),
+        fixed_borrower_change_total=group_change(
+            base_total, shock_total, population.is_indebted & ~population.debt_is_floating
+        ),
+        saver_change_total=group_change(base_total, shock_total, ~population.is_indebted),
+        households_never_consuming=int(never_consuming(baseline).sum()),
+        baseline_consumption=base_total,
+        shocked_consumption=shock_total,
         lending_rate_change_bp=(after["lending_rate"] - before["lending_rate"]) * 10_000,
         deposit_rate_change_bp=(after["deposit_rate"] - before["deposit_rate"]) * 10_000,
         diagnostics_usable=diagnostics.is_usable,

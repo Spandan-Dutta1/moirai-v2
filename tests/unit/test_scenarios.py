@@ -830,3 +830,24 @@ def test_the_headline_needs_no_extreme_extrapolation(population, spillovers):
     result = execute(HEADLINE_SCENARIO, population, spillovers)
     assert not result.shock.is_extreme
 
+
+
+def test_group_totals_are_reported_beside_the_existing_figures(population, spillovers):
+    """ADR 024: the existing figures are unchanged; the change in each
+    group's total is reported beside them and recomputable from the
+    per-household totals the result carries."""
+    from moirai.engine.economy.behaviour import group_change
+
+    result = execute(HEADLINE_SCENARIO, population, spillovers)
+    change = result.change_by_household
+    assert result.borrower_change == pytest.approx(change[population.is_rate_exposed].mean())
+    assert result.saver_change == pytest.approx(change[~population.is_indebted].mean())
+    assert result.borrower_change_total == pytest.approx(
+        group_change(
+            result.baseline_consumption, result.shocked_consumption, population.is_rate_exposed
+        )
+    )
+    assert result.spread_total == pytest.approx(
+        result.borrower_change_total - result.saver_change_total
+    )
+    assert result.households_never_consuming >= 0

@@ -636,3 +636,66 @@ def test_the_mpc_fields_say_where_they_come_from():
     fields = BehaviourParameters.model_fields
     assert "Fagereng" in (fields["mpc_high_wealth"].description or "")
     assert "Assumed" in (fields["mpc_low_wealth"].description or "")
+
+
+# --- measuring a group's response (ADR 024) -----------------------------------
+
+
+def test_a_group_change_is_the_change_in_its_total():
+    from moirai.engine.economy.behaviour import group_change
+
+    baseline = np.array([100.0, 300.0, 600.0])
+    shocked = np.array([90.0, 300.0, 600.0])
+    members = np.array([True, True, True])
+    assert group_change(baseline, shocked, members) == pytest.approx(-0.01)
+
+
+def test_a_household_consuming_almost_nothing_cannot_dominate_the_group():
+    """The failure ADR 024 fixes. One household going from 1 rupee to 400
+    is a 39,900 percent change on its own; as part of a group consuming
+    100,001 it is 0.4 percent."""
+    from moirai.engine.economy.behaviour import group_change
+
+    baseline = np.array([1.0, 100_000.0])
+    shocked = np.array([400.0, 100_000.0])
+    members = np.array([True, True])
+    own = (shocked - baseline) / np.maximum(baseline, 1.0)
+    assert own.mean() > 100  # the old measure: nearly 20,000 percent
+    assert group_change(baseline, shocked, members) == pytest.approx(399 / 100_001)
+
+
+def test_a_group_consuming_nothing_has_no_defined_change():
+    from moirai.core.exceptions import EngineError
+    from moirai.engine.economy.behaviour import group_change
+
+    with pytest.raises(EngineError):
+        group_change(np.zeros(3), np.ones(3), np.array([True, True, True]))
+
+
+def test_households_never_consuming_are_counted(population, parameters):
+    from moirai.engine.economy.behaviour import never_consuming
+
+    baseline, _ = counterfactual(population, make_path(rate_deviation=0.0), parameters)
+    mask = never_consuming(baseline)
+    assert mask.dtype == bool and mask.shape == (len(population),)
+    assert all(np.all(o.consumption[mask] <= 0) for o in baseline)
+
+
+def test_a_cut_and_a_rise_of_the_same_size_have_comparable_effects(population, parameters):
+    """With the old measure a 13bp cut raised floating-rate borrowers'
+    consumption twenty times more than a 13bp rise lowered it. Measured as
+    a change in the group's total, the two are of the same order."""
+    from moirai.engine.economy.behaviour import group_change, total_consumption
+
+    def floating_change(deviation: float) -> float:
+        base, shocked = counterfactual(
+            population, make_path(horizon=24, rate_deviation=deviation), parameters,
+            INDIAN_BANKING_SYSTEM,
+        )
+        return group_change(
+            total_consumption(base), total_consumption(shocked), population.is_rate_exposed
+        )
+
+    rise, cut = floating_change(+0.0013), floating_change(-0.0013)
+    assert rise < 0 < cut
+    assert 0.5 < abs(cut) / abs(rise) < 2.0

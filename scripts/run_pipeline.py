@@ -37,7 +37,11 @@ from moirai.engine.causal.preparation import align, prepare
 from moirai.engine.causal.var import estimate_var
 from moirai.engine.data_fabric.ingestion.fred import FredAdapter
 from moirai.engine.data_fabric.warehouse.duckdb_store import Warehouse
-from moirai.engine.economy.behaviour import BehaviourParameters, counterfactual
+from moirai.engine.economy.behaviour import (
+    BehaviourParameters,
+    counterfactual,
+    group_change,
+)
 from moirai.engine.economy.calibration import evaluate
 from moirai.engine.economy.households import PopulationParameters, generate_population
 from moirai.engine.economy.shock_path import (
@@ -274,17 +278,22 @@ rule("RESULT  Who in India bears a US tightening?")
 
 change = result.change_by_household
 print(f"  HEADLINE  floating-rate borrowers against net savers: "
-      f"{result.spread * 100:.2f} percentage points\n")
+      f"{result.spread * 100:.2f} percentage points")
+print(f"            measured as the change in each group's total consumption: "
+      f"{result.spread_total * 100:.2f} (ADR 024)")
+print(f"  households consuming nothing throughout: {result.households_never_consuming:,} "
+      f"of {len(population):,}\n")
 
-print(f"  {'by exposure':>26}  {'consumption':>13}  {'households':>12}")
+print(f"  {'by exposure':>26}  {'consumption':>13}  {'households':>12}  {'group total':>12}")
 for label, mask in [
     ("floating-rate borrowers", population.is_rate_exposed),
     ("fixed-rate borrowers", population.is_indebted & ~population.debt_is_floating),
     ("net savers", ~population.is_indebted),
 ]:
+    total = group_change(result.baseline_consumption, result.shocked_consumption, mask)
     print(
         f"  {label:>26}  {change[mask].mean() * 100:>12.3f}%  "
-        f"{int(mask.sum()):>12,}"
+        f"{int(mask.sum()):>12,}  {total * 100:>11.3f}%"
     )
 print()
 
@@ -341,16 +350,20 @@ rows = [
 ]
 
 print("\n  THE HEADLINE ACROSS WHAT THE EVIDENCE ALLOWS")
-print(f"  {'':<46} {'RBI caused':>10} {'aggregate':>10} {'savers':>9} {'spread':>8}")
+print(f"  {'':<46} {'RBI caused':>10} {'aggregate':>10} {'savers':>9} {'spread':>8}"
+      f" {'by totals':>10}")
 for label, run in rows:
     print(
         f"  {label:<46} {run.shock.deviation_bp:>+8.1f}bp "
         f"{run.aggregate_consumption_change * 100:>+9.3f}%"
         f" {run.saver_change * 100:>+8.3f}% {run.spread * 100:>6.2f}pp"
+        f" {run.spread_total * 100:>8.2f}pp"
     )
 spreads = [run.spread * 100 for _, run in rows]
 print()
 print(f"  spread range: {max(spreads):.2f} to {min(spreads):.2f} percentage points")
+totals = [run.spread_total * 100 for _, run in rows]
+print(f"  measured by group totals: {max(totals):.2f} to {min(totals):.2f} (ADR 024)")
 print()
 print("  Deposit pass-through moves the aggregate and the savers, not the spread:")
 print("  the spread is carried by what floating-rate borrowers pay. The exchange")
