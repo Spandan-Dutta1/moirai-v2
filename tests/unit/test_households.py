@@ -383,3 +383,72 @@ def test_generation_scales_to_a_large_population():
     population = generate_population(PopulationParameters(n_households=1_000_000))
     assert len(population) == 1_000_000
     assert population.income.nbytes < 10 * 1024 * 1024  # 8 MB for a million floats
+
+
+# --- borrowing capped at what lenders extend (ADR 025) ------------------------
+
+
+def test_without_a_cap_the_population_is_unchanged():
+    from moirai.engine.economy.households import PopulationParameters, generate_population
+
+    plain = generate_population(PopulationParameters(n_households=5_000, seed=3))
+    again = generate_population(
+        PopulationParameters(n_households=5_000, seed=3, max_debt_to_income=None)
+    )
+    assert np.array_equal(plain.debt, again.debt)
+    assert np.array_equal(plain.income, again.income)
+
+
+def test_the_cap_changes_only_tail_debt():
+    """Same draws, same households: the cap lowers debt above the limit and
+    touches nothing else."""
+    from moirai.engine.economy.households import (
+        LENDER_DEBT_TO_INCOME_CAP,
+        PopulationParameters,
+        generate_population,
+    )
+
+    plain = generate_population(PopulationParameters(n_households=20_000, seed=3))
+    capped = generate_population(
+        PopulationParameters(
+            n_households=20_000, seed=3, max_debt_to_income=LENDER_DEBT_TO_INCOME_CAP
+        )
+    )
+    assert np.array_equal(plain.income, capped.income)
+    assert np.array_equal(plain.wealth, capped.wealth)
+    assert np.array_equal(plain.debt_is_floating, capped.debt_is_floating)
+    ratio = capped.debt / np.maximum(capped.income, 1e-9)
+    assert ratio.max() <= LENDER_DEBT_TO_INCOME_CAP + 1e-9
+    within = plain.debt <= LENDER_DEBT_TO_INCOME_CAP * plain.income
+    assert np.array_equal(plain.debt[within], capped.debt[within])
+    assert (capped.debt <= plain.debt + 1e-9).all()
+
+
+def test_the_cap_is_the_lenders_limit_at_the_baseline_rate():
+    """4.22 times income is half of income in repayments on a fifteen-year
+    annuity at 8.25 percent."""
+    from moirai.engine.economy.households import LENDER_DEBT_TO_INCOME_CAP, LENDER_FOIR_LIMIT
+
+    rate, years = 0.0825, 15
+    annuity = rate / (1 - (1 + rate) ** -years)
+    assert pytest.approx(LENDER_FOIR_LIMIT / annuity, abs=0.01) == LENDER_DEBT_TO_INCOME_CAP
+
+
+def test_the_cap_brings_the_population_closer_to_its_calibration_targets():
+    """The uncapped tail reaches debt of a hundred times income. Capping it
+    at the lenders' limit lowers the calibration loss, evidence that the
+    tail was an artefact of the lognormal draw rather than a feature."""
+    from moirai.engine.economy.calibration import evaluate
+    from moirai.engine.economy.households import (
+        LENDER_DEBT_TO_INCOME_CAP,
+        PopulationParameters,
+        generate_population,
+    )
+
+    plain = generate_population(PopulationParameters(n_households=50_000, seed=1))
+    capped = generate_population(
+        PopulationParameters(
+            n_households=50_000, seed=1, max_debt_to_income=LENDER_DEBT_TO_INCOME_CAP
+        )
+    )
+    assert evaluate(capped).loss() < evaluate(plain).loss()

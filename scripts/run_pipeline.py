@@ -43,7 +43,11 @@ from moirai.engine.economy.behaviour import (
     group_change,
 )
 from moirai.engine.economy.calibration import evaluate
-from moirai.engine.economy.households import PopulationParameters, generate_population
+from moirai.engine.economy.households import (
+    LENDER_DEBT_TO_INCOME_CAP,
+    PopulationParameters,
+    generate_population,
+)
 from moirai.engine.economy.shock_path import (
     MacroVariable,
     build_shock_path,
@@ -282,7 +286,35 @@ print(f"  HEADLINE  floating-rate borrowers against net savers: "
 print(f"            measured as the change in each group's total consumption: "
       f"{result.spread_total * 100:.2f} (ADR 024)")
 print(f"  households consuming nothing throughout: {result.households_never_consuming:,} "
-      f"of {len(population):,}\n")
+      f"of {len(population):,}")
+
+# ADR 025. The same households with borrowing capped at what lenders extend.
+capped_population = generate_population(
+    PopulationParameters(
+        n_households=N_HOUSEHOLDS, seed=1, max_debt_to_income=LENDER_DEBT_TO_INCOME_CAP
+    )
+)
+capped = run_scenario(
+    scenario,
+    central_banks,
+    spillovers,
+    irf,
+    shock_name="fedfunds_shock",
+    rate_variable="fedfunds",
+    price_variable="cpiaucsl",
+    output_variable="indpro",
+    population=capped_population,
+    banking_system=banks,
+    diagnostics=report,
+    calibration_loss=evaluate(capped_population).loss(),
+)
+print(f"\n  with borrowing capped at {LENDER_DEBT_TO_INCOME_CAP} times income, the limit lenders")
+print("  apply (ADR 025), the same households give:")
+print(f"    spread {capped.spread * 100:.2f}pp, "
+      f"by group totals {capped.spread_total * 100:.2f}pp, "
+      f"households consuming nothing {capped.households_never_consuming:,}")
+print(f"    calibration loss {capped.calibration_loss:.3f} "
+      f"against {calibration.loss():.3f} uncapped\n")
 
 print(f"  {'by exposure':>26}  {'consumption':>13}  {'households':>12}  {'group total':>12}")
 for label, mask in [

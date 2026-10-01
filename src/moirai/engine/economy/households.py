@@ -49,6 +49,18 @@ class EmploymentStatus(IntEnum):
     OUT_OF_LABOUR_FORCE = 3
 
 
+#: Lenders' limit on fixed obligations as a share of income (FOIR). Indian
+#: banks commonly cap a borrower's total loan repayments at around half of
+#: income. ADR 025.
+LENDER_FOIR_LIMIT = 0.50
+
+#: The debt-to-income multiple that limit implies: a fifteen-year annuity at
+#: the model's baseline lending rate of 8.25 percent (repo 5.25 plus the
+#: fallback spread of 3) costs 0.1186 of the principal a year, so debt of
+#: 0.50 / 0.1186 = 4.22 times income uses half of it.
+LENDER_DEBT_TO_INCOME_CAP = 4.22
+
+
 class PopulationParameters(BaseModel):
     """Calibration for generating a synthetic population.
 
@@ -97,6 +109,18 @@ class PopulationParameters(BaseModel):
     share_with_debt: float = Field(default=0.45, ge=0.0, le=1.0)
     debt_to_income_mean: float = Field(default=1.8, gt=0)
     debt_to_income_sd: float = Field(default=1.0, gt=0)
+    max_debt_to_income: float | None = Field(
+        default=None,
+        gt=0.0,
+        description=(
+            "Cap on a borrower's debt as a multiple of income. None keeps the "
+            "lognormal draw uncapped, whose tail reaches debt of more than a "
+            "hundred times income. A cap of about 4.2 corresponds to the "
+            "fixed-obligation-to-income limit of roughly half of income that "
+            "Indian lenders apply, at the model's baseline lending rate and "
+            "fifteen-year term. See ADR 025."
+        ),
+    )
     share_floating_rate: float = Field(
         default=0.75,
         ge=0.0,
@@ -469,6 +493,10 @@ def generate_population(parameters: PopulationParameters | None = None) -> Popul
     ratio = rng.lognormal(
         np.log(parameters.debt_to_income_mean), parameters.debt_to_income_sd, size=n
     )
+    if parameters.max_debt_to_income is not None:
+        # The draws are unchanged, so every household is the same except
+        # that tail borrowers carry no more than lenders would extend.
+        ratio = np.minimum(ratio, parameters.max_debt_to_income)
     debt = np.where(has_debt, income * ratio, 0.0)
     debt_is_floating = has_debt & (rng.random(n) < parameters.share_floating_rate)
 
