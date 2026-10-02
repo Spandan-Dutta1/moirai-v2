@@ -74,6 +74,12 @@ IMF_SPILLOVER_SOURCE = (
 #: allocation across the other four economies is not.
 US_TO_EM_YIELD_PASSTHROUGH = 0.36
 
+#: Share of India's imports invoiced in US dollars, against 5 percent of its
+#: imports originating in the United States: Gopinath (2015), the dominant
+#: currency evidence. The weight the Fed's rate carries in the RBI's
+#: external objective when it is weighted by invoicing currency (ADR 027).
+INDIA_DOLLAR_INVOICING_SHARE = 0.86
+
 #: RBI staff estimate of exchange rate pass-through to headline CPI: a 5
 #: percent rupee depreciation from baseline raises inflation by around 20
 #: basis points, so 0.04. RBI Monetary Policy Report, October 2022,
@@ -187,10 +193,27 @@ class SpilloverMatrix(BaseModel):
     confidence: Confidence = Confidence.ASSUMED
     note: str = ""
     source: str = Field(default="", description="Citation, when there is one.")
+    external_reference: Any = Field(
+        default=None,
+        description=(
+            "(n, n) weights: row i says how much each other bank's rate counts "
+            "in bank i's external objective. None weights the others equally, "
+            "the original specification. Rows sum to one, the diagonal is zero. "
+            "ADR 027."
+        ),
+    )
 
     @model_validator(mode="after")
     def _matrices_are_square_and_matched(self) -> SpilloverMatrix:
         n = len(self.names)
+        if self.external_reference is not None:
+            weights = np.asarray(self.external_reference, dtype=float)
+            if weights.shape != (n, n):
+                raise ValueError(f"external_reference is {weights.shape}, expected ({n}, {n})")
+            if np.any(weights < 0) or np.any(np.diag(weights) != 0):
+                raise ValueError("external_reference must be non-negative with a zero diagonal")
+            if not np.allclose(weights.sum(axis=1), 1.0):
+                raise ValueError("each row of external_reference must sum to one")
         for label, matrix in (("demand", self.demand), ("exchange", self.exchange)):
             array = np.asarray(matrix, dtype=float)
             if array.shape != (n, n):
@@ -208,6 +231,34 @@ class SpilloverMatrix(BaseModel):
             raise EngineError(
                 f"{name!r} is not in this network; have {list(self.names)}"
             ) from None
+
+    def reference_weights(self) -> np.ndarray:
+        """Each bank's weights on the others in its external objective."""
+        if self.external_reference is not None:
+            return np.asarray(self.external_reference, dtype=float)
+        n = len(self.names)
+        weights = np.full((n, n), 1.0 / max(n - 1, 1))
+        np.fill_diagonal(weights, 0.0)
+        return weights
+
+    def with_reference(self, bank: str, weights: dict[str, float]) -> SpilloverMatrix:
+        """A copy in which one bank's external objective weights the others
+        as given; every other bank keeps its current weights.
+
+        Weights are normalised to sum to one over the banks named; banks not
+        named get zero.
+        """
+        i = self.index_of(bank)
+        if bank in weights:
+            raise EngineError("a bank's external objective cannot reference itself")
+        total = sum(weights.values())
+        if total <= 0 or any(w < 0 for w in weights.values()):
+            raise EngineError("reference weights must be non-negative and not all zero")
+        matrix = self.reference_weights().copy()
+        matrix[i] = 0.0
+        for name, weight in weights.items():
+            matrix[i, self.index_of(name)] = weight / total
+        return self.model_copy(update={"external_reference": matrix})
 
     def with_exchange(self, receiver: str, sender: str, value: float) -> SpilloverMatrix:
         """A copy with one exchange rate cell replaced, for sensitivity analysis.
@@ -591,7 +642,10 @@ def _reaction_system(
         if we > 0:
             for j in range(n):
                 if j != i:
-                    matrix[i, j] -= 2 * we / max(n - 1, 1)
+                    if spillovers.external_reference is None:
+                        matrix[i, j] -= 2 * we / max(n - 1, 1)
+                    else:
+                        matrix[i, j] -= 2 * we * spillovers.reference_weights()[i, j]
 
     return matrix, rhs
 
@@ -619,12 +673,11 @@ def _losses_at(
                 output -= demand[i, j] * moves[j]
 
         others = [float(rates[j]) for j in range(n) if j != i]
-        losses[bank.name] = bank.loss(
-            inflation,
-            output,
-            float(rates[i]),
-            external_gap=bank.external_gap(float(rates[i]), others),
-        )
+        if spillovers.external_reference is None:
+            gap = bank.external_gap(float(rates[i]), others)
+        else:
+            gap = float(rates[i] - spillovers.reference_weights()[i] @ rates)
+        losses[bank.name] = bank.loss(inflation, output, float(rates[i]), external_gap=gap)
     return losses
 
 

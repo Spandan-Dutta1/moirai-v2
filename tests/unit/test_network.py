@@ -637,3 +637,104 @@ def test_a_lower_exchange_coefficient_shrinks_the_rbis_imported_move():
         return with_shock - network_nash(banks, spill).rates[RBI.name]
 
     assert 0 < caused(floor) < caused(matrix)
+
+
+# --- the external objective weighted by reference (ADR 027) -------------------
+
+
+def test_equal_reference_weights_reproduce_the_original_equilibrium():
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+    equal = matrix.model_copy(update={"external_reference": matrix.reference_weights()})
+    one = network_nash(banks, matrix).rates
+    two = network_nash(banks, equal).rates
+    for name in one:
+        assert two[name] == pytest.approx(one[name], abs=1e-12)
+
+
+def test_with_reference_normalises_one_banks_row():
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    dollar = matrix.with_reference(
+        "Reserve Bank of India", {"Federal Reserve": 3.0, "European Central Bank": 1.0}
+    )
+    weights = dollar.reference_weights()
+    i = dollar.index_of("Reserve Bank of India")
+    assert weights[i, dollar.index_of("Federal Reserve")] == pytest.approx(0.75)
+    assert weights[i].sum() == pytest.approx(1.0)
+    others = [k for k in range(len(dollar.names)) if k != i]
+    assert np.allclose(weights[others], matrix.reference_weights()[others])
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        {"Reserve Bank of India": 1.0},
+        {"Federal Reserve": -1.0, "European Central Bank": 2.0},
+        {"Federal Reserve": 0.0},
+    ],
+)
+def test_with_reference_refuses_what_it_cannot_mean(weights):
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    with pytest.raises(EngineError):
+        matrix.with_reference("Reserve Bank of India", weights)
+
+
+def test_a_malformed_reference_matrix_is_refused():
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    bad = np.ones((5, 5)) / 5
+    with pytest.raises(ValueError):
+        matrix.model_copy(update={"external_reference": bad}).model_validate(
+            matrix.model_copy(update={"external_reference": bad}).model_dump()
+        )
+
+
+def test_a_dollar_weighted_rbi_follows_the_fed_more():
+    from moirai.engine.financial.network import INDIA_DOLLAR_INVOICING_SHARE
+
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS)
+    rest = (1 - INDIA_DOLLAR_INVOICING_SHARE) / 3
+    dollar = matrix.with_reference(
+        "Reserve Bank of India",
+        {
+            "Federal Reserve": INDIA_DOLLAR_INVOICING_SHARE,
+            "European Central Bank": rest,
+            "Bank of Japan": rest,
+            "Bank of England": rest,
+        },
+    )
+    banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+    shocked = tuple(
+        b.model_copy(update={"current_inflation": 0.045}) if b.name == FED.name else b
+        for b in banks
+    )
+
+    def ratio(spill):
+        s, r = network_nash(shocked, spill).rates, network_nash(banks, spill).rates
+        return (s[RBI.name] - r[RBI.name]) / (s[FED.name] - r[FED.name])
+
+    assert ratio(dollar) > ratio(matrix)
+
+
+def test_the_weighted_equilibrium_is_a_best_reply_under_the_weighted_loss():
+    from scipy.optimize import minimize_scalar
+
+    from moirai.engine.financial import network as nw
+
+    matrix = SpilloverMatrix.from_literature(DEFAULT_TIERS).with_reference(
+        "Reserve Bank of India", {"Federal Reserve": 0.86, "European Central Bank": 0.14}
+    )
+    banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+    result = network_nash(banks, matrix)
+    ordered = tuple(next(b for b in banks if b.name == n) for n in matrix.names)
+    rates = np.array([result.rates[n] for n in matrix.names])
+    for i, bank in enumerate(ordered):
+
+        def loss(x, i=i, bank=bank):
+            trial = rates.copy()
+            trial[i] = x
+            return nw._losses_at(ordered, trial, matrix)[bank.name]
+
+        best = minimize_scalar(
+            loss, bounds=(-0.1, 0.3), method="bounded", options={"xatol": 1e-12}
+        ).x
+        assert best == pytest.approx(rates[i], abs=1e-6)

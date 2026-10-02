@@ -37,6 +37,7 @@ from moirai.engine.causal.preparation import align, prepare
 from moirai.engine.causal.var import estimate_var
 from moirai.engine.data_fabric.ingestion.fred import FredAdapter
 from moirai.engine.data_fabric.warehouse.duckdb_store import Warehouse
+from moirai.engine.dynamic_chain import calibrated_inputs, run_dynamic_scenario
 from moirai.engine.economy.behaviour import (
     BehaviourParameters,
     counterfactual,
@@ -404,6 +405,59 @@ print("  the RBI imports. The one-day rupee response to Fed surprises puts a flo
 print("  under it; the twelve-month response is consistent with the default but")
 print("  too noisy to confirm. So the finding is a range, and the transfer from")
 print("  borrowers to savers is its shape at every point in it.")
+
+
+# ------------------------------------------------------- dynamic game
+rule("THE HEADLINE ON THE CALIBRATED DYNAMIC GAME  (ADRs 023, 026, 027)")
+
+dynamic_banks, dynamic_spillovers, dynamic_parameters = calibrated_inputs(
+    central_banks, spillovers
+)
+dynamic = run_dynamic_scenario(
+    scenario,
+    dynamic_banks,
+    dynamic_spillovers,
+    population=capped_population,
+    banking_system=banks,
+    parameters=dynamic_parameters,
+)
+fed_index = dynamic.equilibrium.index_of(FED.name)
+fed_caused = (
+    np.asarray(dynamic.equilibrium.moves) - np.asarray(dynamic.reference_equilibrium.moves)
+)[:, fed_index] * 10_000
+rbi_caused = np.asarray(dynamic.caused_moves_bp)
+
+print("  timing : policy works with lags; inertia calibrated so the Fed's rule")
+print("           puts 0.79 on its previous rate (Clarida, Gali and Gertler 2000)")
+print("  size   : the RBI's external objective weighted by invoicing currency")
+print("           (86 percent dollar, Gopinath 2015), its weight set so it follows")
+print("           the Fed by the measured floor, 0.47 per point (ADR 027)")
+print("  households: the capped population (ADR 025)\n")
+print("  caused move, bp   " + " ".join(f"{f'Q{q}':>6}" for q in range(8)))
+print("  Fed               " + " ".join(f"{v:>+6.1f}" for v in fed_caused[:8]))
+print("  RBI               " + " ".join(f"{v:>+6.1f}" for v in rbi_caused[:8]))
+print()
+print(f"  floating-rate borrowers {dynamic.borrower_change * 100:>+8.3f}%")
+print(f"  net savers              {dynamic.saver_change * 100:>+8.3f}%")
+print(f"  spread, by group totals {dynamic.spread * 100:>+8.3f}pp")
+print(f"  aggregate consumption   {dynamic.aggregate_consumption_change * 100:>+8.3f}%")
+print(f"  households consuming nothing: {dynamic.households_never_consuming:,}")
+
+static_fed = result.equilibrium.rates[FED.name] - result.reference_equilibrium.rates[FED.name]
+static_per_100 = capped.spread_total / (static_fed * 10_000) * 100
+dynamic_per_100 = dynamic.spread / max(fed_caused.max(), 1e-9) * 100
+print("\n  spread per 100bp of Fed tightening (capped population, group totals):")
+static_rbi = result.equilibrium.rates[RBI.name] - result.reference_equilibrium.rates[RBI.name]
+print(f"    static game  {static_per_100 * 100:+.2f}pp   (RBI follows the Fed by "
+      f"{static_rbi / static_fed:.2f})")
+print(f"    dynamic game {dynamic_per_100 * 100:+.2f}pp   (RBI follows the Fed by "
+      f"{rbi_caused.max() / fed_caused.max():.2f}, calibrated to the measured floor)")
+print()
+print("  With lags and inertia, a US inflation shock that fades moves the Fed")
+print("  gradually and by less, so the dynamic game's level is smaller. Per point")
+print("  of Fed tightening, the calibrated RBI follows the Fed three times as")
+print("  closely as the static one, and floating-rate borrowers bear correspondingly")
+print("  more. Both are reported; neither replaces the validated headline.")
 
 
 # ----------------------------------------------------------- comparison

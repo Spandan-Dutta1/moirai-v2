@@ -93,6 +93,18 @@ CALIBRATED_INERTIA_WEIGHT = 6.97
 #: The smoothing coefficient the calibration targets.
 FED_SMOOTHING_TARGET = 0.79
 
+#: The RBI's measured response per point of expected US policy, the floor
+#: of the range ADR 027 measures: repo rate response over two-year Treasury
+#: yield response to the same Fed surprises, at the horizons where both are
+#: significant.
+RBI_FOLLOWING_FLOOR = 0.47
+
+#: The RBI's external weight at which, with its external objective weighted
+#: by invoicing currency and the calibrated inertia, its peak caused move is
+#: RBI_FOLLOWING_FLOOR times the Fed's. The validated RBI default, 0.40, is
+#: unchanged; this is used only by the calibrated dynamic game. ADR 027.
+CALIBRATED_RBI_EXTERNAL_WEIGHT = 1.92
+
 
 class DynamicParameters(BaseModel):
     """Timing of transmission. The long-run effects come from the matrix."""
@@ -275,7 +287,10 @@ def dynamic_nash(
             others = [j for j in range(n) if j != i]
             A_i = A - sum(B[j] @ F[j : j + 1] for j in others)
             # The mean of the others' moves is -G_i x under their rules.
-            G_i = F[others].mean(axis=0, keepdims=True)
+            if spillovers.external_reference is None:
+                G_i = F[others].mean(axis=0, keepdims=True)
+            else:
+                G_i = spillovers.reference_weights()[i : i + 1] @ F
             we = bank.external_weight
             Q = np.zeros((size, size))
             Q[i, i] = bank.inflation_weight
@@ -373,7 +388,10 @@ def discounted_loss(
     others = [j for j in range(n) if j != bank_index]
     for _ in range(periods):
         u = -rules @ x
-        gap = u[bank_index] - u[others].mean()
+        if spillovers.external_reference is None:
+            gap = u[bank_index] - u[others].mean()
+        else:
+            gap = u[bank_index] - spillovers.reference_weights()[bank_index] @ u
         total += weight * (
             bank.inflation_weight * x[bank_index] ** 2
             + bank.output_weight * x[n + bank_index] ** 2

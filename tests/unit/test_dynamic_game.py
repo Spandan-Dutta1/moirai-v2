@@ -230,3 +230,60 @@ def test_inertia_smooths_every_banks_path(matrix):
         parameters=DynamicParameters(inertia_weight=2.0),
     )
     assert _roughness(smooth) < _roughness(plain)
+
+
+# --- the calibrated RBI (ADR 027) ---------------------------------------------
+
+
+def _calibrated():
+    from moirai.engine.dynamic_chain import calibrated_inputs
+
+    return calibrated_inputs(BANKS, SpilloverMatrix.from_literature(DEFAULT_TIERS))
+
+
+@pytest.mark.parametrize("bank", [FED, RBI])
+def test_rules_are_best_responses_in_the_calibrated_game(bank):
+    banks, matrix, params = _calibrated()
+    shocked = IMPORTED_TIGHTENING.apply_to(banks)
+    result = dynamic_nash(shocked, matrix, parameters=params)
+    rules = np.asarray(result.rules)
+    i = matrix.index_of(bank.name)
+    base = discounted_loss(i, shocked, matrix, rules, parameters=params)
+    rng = np.random.default_rng(2)
+    for _ in range(20):
+        perturbed = rules.copy()
+        perturbed[i] += rng.normal(0, 0.05, rules.shape[1])
+        assert discounted_loss(i, shocked, matrix, perturbed, parameters=params) >= base - 1e-12
+
+
+def test_the_calibrated_rbi_follows_the_fed_by_the_measured_floor():
+    from moirai.engine.financial.dynamic_game import RBI_FOLLOWING_FLOOR
+
+    banks, matrix, params = _calibrated()
+    shocked = dynamic_nash(IMPORTED_TIGHTENING.apply_to(banks), matrix, parameters=params)
+    reference = dynamic_nash(banks, matrix, parameters=params)
+    caused = np.asarray(shocked.moves) - np.asarray(reference.moves)
+    fed = caused[:, matrix.index_of(FED.name)].max()
+    rbi = caused[:, matrix.index_of(RBI.name)].max()
+    assert rbi / fed == pytest.approx(RBI_FOLLOWING_FLOOR, abs=0.01)
+
+
+def test_the_calibrated_rbi_keeps_the_measured_shape():
+    """Calibrating the size must not undo ADR 026's timing: the RBI still
+    builds up over the first quarters and stays up."""
+    banks, matrix, params = _calibrated()
+    shocked = dynamic_nash(IMPORTED_TIGHTENING.apply_to(banks), matrix, parameters=params)
+    reference = dynamic_nash(banks, matrix, parameters=params)
+    path = (np.asarray(shocked.moves) - np.asarray(reference.moves))[:, matrix.index_of(RBI.name)]
+    measured = np.array([1.33, 3.06, 4.99, 4.97, 5.06])
+    model = path[:5] / np.abs(path[:5]).max()
+    assert ((model - measured / measured.max()) ** 2).sum() < 0.05
+
+
+def test_calibration_leaves_the_validated_rbi_default_alone():
+    from moirai.engine.financial.dynamic_game import CALIBRATED_RBI_EXTERNAL_WEIGHT
+
+    banks, _, _ = _calibrated()
+    calibrated_rbi = next(b for b in banks if b.name == RBI.name)
+    assert calibrated_rbi.external_weight == CALIBRATED_RBI_EXTERNAL_WEIGHT
+    assert RBI.external_weight == 0.40
