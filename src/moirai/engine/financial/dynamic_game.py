@@ -82,6 +82,17 @@ INFLATION_PERSISTENCE = 0.80
 #: Quarterly discount factor.
 DISCOUNT = 0.99
 
+#: Policy inertia calibrated so the Fed's equilibrium rule puts 0.79 on its
+#: own previous rate, the smoothing coefficient Clarida, Gali and Gertler
+#: (2000) estimate for the Volcker-Greenspan Fed at quarterly frequency.
+#: Calibrated on the Fed, a published estimate, and checked against the RBI,
+#: whose measured response to Fed surprises (ADR 022) was not used to choose
+#: it. ADR 026.
+CALIBRATED_INERTIA_WEIGHT = 6.97
+
+#: The smoothing coefficient the calibration targets.
+FED_SMOOTHING_TARGET = 0.79
+
 
 class DynamicParameters(BaseModel):
     """Timing of transmission. The long-run effects come from the matrix."""
@@ -91,6 +102,16 @@ class DynamicParameters(BaseModel):
     output_persistence: float = Field(default=OUTPUT_PERSISTENCE, ge=0.0, lt=1.0)
     inflation_persistence: float = Field(default=INFLATION_PERSISTENCE, ge=0.0, lt=1.0)
     discount: float = Field(default=DISCOUNT, gt=0.0, lt=1.0)
+    inertia_weight: float = Field(
+        default=0.0,
+        ge=0.0,
+        description=(
+            "Weight on the squared change in a bank's rate from the previous "
+            "quarter: policy inertia, as in estimated inertial Taylor rules. "
+            "Zero reproduces ADR 023 exactly. ADR 026 calibrates it to the "
+            "RBI's measured response to Fed surprises."
+        ),
+    )
     tolerance: float = Field(default=1e-10, gt=0)
     max_iterations: int = Field(default=5_000, gt=0)
 
@@ -174,6 +195,29 @@ def transition(
     return A, B
 
 
+def _augmented(
+    A: np.ndarray, B: list[np.ndarray], n: int, parameters: DynamicParameters
+) -> tuple[np.ndarray, list[np.ndarray], int]:
+    """Add last quarter's moves to the state when inertia is on.
+
+    The state becomes (pi, y, u_lag); each bank's move this quarter is next
+    quarter's u_lag. Without inertia the state is returned unchanged, so
+    ADR 023's solution is reproduced exactly rather than approximately.
+    """
+    if parameters.inertia_weight == 0.0:
+        return A, B, 2 * n
+    size = 3 * n
+    A_aug = np.zeros((size, size))
+    A_aug[: 2 * n, : 2 * n] = A
+    B_aug = []
+    for i in range(n):
+        b = np.zeros((size, 1))
+        b[: 2 * n] = B[i]
+        b[2 * n + i, 0] = 1.0
+        B_aug.append(b)
+    return A_aug, B_aug, size
+
+
 def _solve_lq(A, B, Q, R, N, discount, tolerance, max_iterations):
     """Discounted LQ regulator with a cross term, by value iteration.
 
@@ -219,7 +263,9 @@ def dynamic_nash(
         raise EngineError("a game needs at least two banks")
 
     A, B = transition(ordered, spillovers, parameters)
-    F = np.zeros((n, 2 * n))
+    A, B, size = _augmented(A, B, n, parameters)
+    w_inertia = parameters.inertia_weight
+    F = np.zeros((n, size))
 
     iterations = 0
     for _ in range(parameters.max_iterations):
@@ -231,12 +277,17 @@ def dynamic_nash(
             # The mean of the others' moves is -G_i x under their rules.
             G_i = F[others].mean(axis=0, keepdims=True)
             we = bank.external_weight
-            Q = np.zeros((2 * n, 2 * n))
+            Q = np.zeros((size, size))
             Q[i, i] = bank.inflation_weight
             Q[n + i, n + i] = bank.output_weight
             Q += we * G_i.T @ G_i
-            R = np.array([[bank.smoothing_weight + we]])
+            R = np.array([[bank.smoothing_weight + we + w_inertia]])
             N = we * G_i.T
+            if w_inertia > 0:
+                # w (u_i - u_lag_i)^2 = w u_i^2 - 2 w u_i u_lag_i + w u_lag_i^2
+                lag = 2 * n + i
+                Q[lag, lag] += w_inertia
+                N[lag, 0] -= w_inertia
             F[i] = _solve_lq(
                 A_i,
                 B[i],
@@ -260,6 +311,7 @@ def dynamic_nash(
         [
             [b.current_inflation - b.inflation_target for b in ordered],
             [b.current_output_gap for b in ordered],
+            np.zeros(size - 2 * n),
         ]
     )
     moves, states = [], [x]
@@ -276,7 +328,7 @@ def dynamic_nash(
         current_rates=tuple(b.current_rate for b in ordered),
         moves=np.array(moves),
         inflation_gaps=states_arr[:, :n],
-        output_gaps=states_arr[:, n:],
+        output_gaps=states_arr[:, n : 2 * n],
         iterations=iterations,
         parameters=parameters,
     )
@@ -306,14 +358,17 @@ def discounted_loss(
     ordered = tuple(next(b for b in banks if b.name == n) for n in spillovers.names)
     n = len(ordered)
     A, B = transition(ordered, spillovers, parameters)
+    A, B, size = _augmented(A, B, n, parameters)
     closed = A - sum(B[i] @ rules[i : i + 1] for i in range(n))
     bank = ordered[bank_index]
     x = np.concatenate(
         [
             [b.current_inflation - b.inflation_target for b in ordered],
             [b.current_output_gap for b in ordered],
+            np.zeros(size - 2 * n),
         ]
     )
+    previous = np.zeros(n)
     total, weight = 0.0, 1.0
     others = [j for j in range(n) if j != bank_index]
     for _ in range(periods):
@@ -324,7 +379,24 @@ def discounted_loss(
             + bank.output_weight * x[n + bank_index] ** 2
             + bank.smoothing_weight * u[bank_index] ** 2
             + bank.external_weight * gap**2
+            + parameters.inertia_weight * (u[bank_index] - previous[bank_index]) ** 2
         )
+        previous = u
         weight *= parameters.discount
         x = closed @ x
     return total
+
+
+def smoothing_coefficient(equilibrium: DynamicEquilibrium, name: str) -> float:
+    """The weight a bank's equilibrium rule puts on its own previous move.
+
+    Comparable to the coefficient on the lagged rate in an estimated
+    inertial Taylor rule. Zero when the game has no inertia, since the
+    previous move is then not part of the state.
+    """
+    i = equilibrium.index_of(name)
+    rules = np.asarray(equilibrium.rules)
+    n = len(equilibrium.names)
+    if rules.shape[1] == 2 * n:
+        return 0.0
+    return float(-rules[i, 2 * n + i])

@@ -158,3 +158,75 @@ def test_the_persistence_parameters_are_validated():
         DynamicParameters(output_persistence=1.0)
     with pytest.raises(ValueError):
         DynamicParameters(inflation_persistence=-0.1)
+
+
+# --- policy inertia (ADR 026) -------------------------------------------------
+
+
+def test_without_inertia_the_state_and_rules_are_unchanged(matrix):
+    """Zero inertia keeps ADR 023's two-block state, so its results
+    reproduce exactly rather than approximately."""
+    result = dynamic_nash(IMPORTED_TIGHTENING.apply_to(BANKS), matrix)
+    assert np.asarray(result.rules).shape == (5, 10)
+
+
+def test_with_inertia_last_quarters_moves_join_the_state(matrix):
+    params = DynamicParameters(inertia_weight=1.0)
+    result = dynamic_nash(IMPORTED_TIGHTENING.apply_to(BANKS), matrix, parameters=params)
+    assert np.asarray(result.rules).shape == (5, 15)
+
+
+@pytest.mark.parametrize("bank", [FED, RBI])
+def test_rules_are_best_responses_with_inertia(matrix, bank):
+    params = DynamicParameters(inertia_weight=2.0)
+    banks = IMPORTED_TIGHTENING.apply_to(BANKS)
+    result = dynamic_nash(banks, matrix, parameters=params)
+    rules = np.asarray(result.rules)
+    i = matrix.index_of(bank.name)
+    base = discounted_loss(i, banks, matrix, rules, parameters=params)
+    rng = np.random.default_rng(1)
+    for _ in range(20):
+        perturbed = rules.copy()
+        perturbed[i] += rng.normal(0, 0.05, rules.shape[1])
+        assert discounted_loss(i, banks, matrix, perturbed, parameters=params) >= base - 1e-12
+
+
+def test_the_calibrated_weight_gives_the_fed_its_estimated_smoothing(matrix):
+    from moirai.engine.financial.dynamic_game import (
+        CALIBRATED_INERTIA_WEIGHT,
+        FED_SMOOTHING_TARGET,
+        smoothing_coefficient,
+    )
+
+    params = DynamicParameters(inertia_weight=CALIBRATED_INERTIA_WEIGHT)
+    result = dynamic_nash(BANKS, matrix, parameters=params)
+    assert smoothing_coefficient(result, FED.name) == pytest.approx(FED_SMOOTHING_TARGET, abs=0.005)
+
+
+def test_inertia_makes_the_rbi_build_up_rather_than_jump(matrix):
+    """The shape ADR 022 measured: the RBI's caused move rises for the
+    first quarters instead of being largest at once."""
+    from moirai.engine.financial.dynamic_game import CALIBRATED_INERTIA_WEIGHT
+
+    params = DynamicParameters(inertia_weight=CALIBRATED_INERTIA_WEIGHT)
+    shocked = dynamic_nash(IMPORTED_TIGHTENING.apply_to(BANKS), matrix, parameters=params)
+    reference = dynamic_nash(BANKS, matrix, parameters=params)
+    caused = (np.asarray(shocked.moves) - np.asarray(reference.moves))[:, matrix.index_of(RBI.name)]
+    assert caused[0] > 0
+    assert caused[2] > caused[0]
+    assert caused[4] > 0
+
+
+def _roughness(result) -> float:
+    moves = np.vstack([np.zeros(5), np.asarray(result.moves)])
+    return float(np.sum(np.diff(moves, axis=0) ** 2))
+
+
+def test_inertia_smooths_every_banks_path(matrix):
+    plain = dynamic_nash(IMPORTED_TIGHTENING.apply_to(BANKS), matrix)
+    smooth = dynamic_nash(
+        IMPORTED_TIGHTENING.apply_to(BANKS),
+        matrix,
+        parameters=DynamicParameters(inertia_weight=2.0),
+    )
+    assert _roughness(smooth) < _roughness(plain)
