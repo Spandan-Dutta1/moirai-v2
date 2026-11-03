@@ -230,7 +230,16 @@ def _augmented(
     return A_aug, B_aug, size
 
 
-def _solve_lq(A, B, Q, R, N, discount, tolerance, max_iterations):
+def _solve_lq(
+    A: np.ndarray,
+    B: np.ndarray,
+    Q: np.ndarray,
+    R: np.ndarray,
+    N: np.ndarray,
+    discount: float,
+    tolerance: float,
+    max_iterations: int,
+) -> np.ndarray:
     """Discounted LQ regulator with a cross term, by value iteration.
 
     Minimise sum beta^t (x'Qx + u'Ru + 2 x'N u) subject to x' = A x + B u.

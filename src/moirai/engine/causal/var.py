@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -316,7 +316,7 @@ def _sigma_u(residuals: np.ndarray, n_parameters: int, *, corrected: bool = True
     denominator = (t - n_parameters) if corrected else t
     if denominator <= 0:
         raise EngineError("not enough observations to estimate the residual covariance")
-    return (residuals.T @ residuals) / denominator
+    return cast(np.ndarray, (residuals.T @ residuals) / denominator)
 
 
 def select_lag_order(

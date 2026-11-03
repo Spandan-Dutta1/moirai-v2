@@ -26,7 +26,7 @@ different dispersions and correlated rather than independently.
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -270,7 +270,7 @@ class Population:
 
     @property
     def net_worth(self) -> np.ndarray:
-        return self.wealth - self.debt
+        return cast(np.ndarray, self.wealth - self.debt)
 
     @property
     def debt_to_income(self) -> np.ndarray:
@@ -280,11 +280,11 @@ class Population:
 
     @property
     def is_employed(self) -> np.ndarray:
-        return self.employment == EmploymentStatus.EMPLOYED
+        return cast(np.ndarray, self.employment == EmploymentStatus.EMPLOYED)
 
     @property
     def is_retired(self) -> np.ndarray:
-        return self.employment == EmploymentStatus.RETIRED
+        return cast(np.ndarray, self.employment == EmploymentStatus.RETIRED)
 
     @property
     def is_in_labour_force(self) -> np.ndarray:
@@ -308,7 +308,7 @@ class Population:
         Fixed-rate borrowers are insulated until they refinance, which is
         why the fixed-floating split changes how much a rate rise bites.
         """
-        return self.is_indebted & self.debt_is_floating
+        return cast(np.ndarray, self.is_indebted & self.debt_is_floating)
 
     # ---- distributional statistics ----
 

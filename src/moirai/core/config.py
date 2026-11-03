@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from pydantic import Field, ValidationError, field_validator, model_validator
@@ -137,7 +138,7 @@ class Settings(BaseSettings):
     # ---- derived values ----
 
     @property
-    def warehouse_path(self):
+    def warehouse_path(self) -> Path:
         """Absolute path to the DuckDB file. Derived, never configured directly."""
         return get_paths().warehouse / self.warehouse_filename
 

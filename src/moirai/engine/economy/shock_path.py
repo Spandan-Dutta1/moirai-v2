@@ -29,7 +29,7 @@ programme rather than a function.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -155,7 +155,7 @@ class ShockPath(BaseModel):
                 f"{variable.value} is not in this shock path; "
                 f"have {[v.value for v in self.paths]}"
             )
-        return self.paths[variable]
+        return cast(np.ndarray, self.paths[variable])
 
     def at(self, period: int) -> dict[MacroVariable, float]:
         """Every macro variable at one period, which is what a household reads."""

@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from datetime import date
 from enum import StrEnum
 from itertools import permutations
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -105,7 +105,7 @@ class StructuralModel(BaseModel):
         if np.any(scale == 0):
             raise EngineError("a structural shock has zero variance")
         standardised = self.shocks / scale
-        return np.corrcoef(standardised, rowvar=False)
+        return cast(np.ndarray, np.corrcoef(standardised, rowvar=False))
 
     def max_off_diagonal_correlation(self) -> float:
         correlation = self.shock_correlation()
@@ -677,13 +677,13 @@ def identify_proxy(
     completed = lower @ basis
 
     # Put the identified column where the policy variable sits.
-    order = [None] * var.n_variables
+    order: list[int | None] = [None] * var.n_variables
     order[policy] = 0
     others = iter(range(1, var.n_variables))
     for k in range(var.n_variables):
         if order[k] is None:
             order[k] = next(others)
-    impact = completed[:, order]
+    impact = completed[:, cast(list[int], order)]
 
     shocks = np.linalg.solve(impact, var.residuals.T).T
     policy_name = shock_name or f"{policy_variable}_shock"

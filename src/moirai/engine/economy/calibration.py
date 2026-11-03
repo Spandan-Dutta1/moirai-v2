@@ -449,7 +449,7 @@ def search(
     base: PopulationParameters | None = None,
     moments: Sequence[Moment] = URBAN_INDIA_MOMENTS,
     n_households: int = 50_000,
-) -> tuple[PopulationParameters, CalibrationReport, list[tuple[dict, float]]]:
+) -> tuple[PopulationParameters, CalibrationReport, list[tuple[dict[str, float], float]]]:
     """Grid search for the parameters that best reproduce the targets.
 
     Returns the best parameters, their report, and every evaluation so the
@@ -470,7 +470,7 @@ def search(
             raise EngineError(f"{name!r} is not a population parameter")
 
     names = list(grid)
-    trials: list[tuple[dict, float]] = []
+    trials: list[tuple[dict[str, float], float]] = []
     best_loss = float("inf")
     best: tuple[PopulationParameters, CalibrationReport] | None = None
 

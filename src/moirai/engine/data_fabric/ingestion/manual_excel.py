@@ -287,7 +287,7 @@ class ManualExcelAdapter(SourceAdapter):
         )
         return series
 
-    def _verify_header(self, rows: list[tuple]) -> None:
+    def _verify_header(self, rows: list[tuple[Any, ...]]) -> None:
         """Confirm the value column still holds the expected series.
 
         Column indices are stable in practice but not guaranteed. Without

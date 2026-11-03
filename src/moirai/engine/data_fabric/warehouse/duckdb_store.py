@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import duckdb
 
@@ -312,9 +312,9 @@ class Warehouse:
         ).fetchone()
         if row is None:
             raise DataFabricError(f"series {series_id!r} is not in the warehouse")
-        return json.loads(row[0])
+        return cast(dict[str, Any], json.loads(row[0]))
 
-    def _build(self, series_id: str, rows: Sequence[tuple]) -> TimeSeries:
+    def _build(self, series_id: str, rows: Sequence[tuple[Any, ...]]) -> TimeSeries:
         observations = [
             Observation(period=row[0], known_at=row[1], revision=row[2], value=row[3])
             for row in rows
@@ -423,7 +423,7 @@ class Warehouse:
             ).fetchone()
         return int(row[0]) if row else 0
 
-    def query(self, sql: str, params: Sequence[Any] | None = None) -> list[tuple]:
+    def query(self, sql: str, params: Sequence[Any] | None = None) -> list[tuple[Any, ...]]:
         """Escape hatch for ad-hoc analytical SQL."""
         return self._connection.execute(sql, list(params or [])).fetchall()
 

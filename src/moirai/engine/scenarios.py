@@ -47,7 +47,11 @@ from moirai.engine.economy.behaviour import (
 from moirai.engine.economy.households import Population
 from moirai.engine.economy.policy_shock import PolicyShock, mappings_for_bank, path_from_game
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath
-from moirai.engine.financial.central_banks import MAJOR_CENTRAL_BANKS, CentralBank
+from moirai.engine.financial.central_banks import (
+    MAJOR_CENTRAL_BANKS,
+    AnalyticSolution,
+    CentralBank,
+)
 from moirai.engine.financial.commercial_banks import BankingSystem
 from moirai.engine.financial.network import (
     NetworkEquilibrium,
@@ -424,7 +428,7 @@ def _solve(
     return network_stackelberg(banks, spillovers, scenario.leader)
 
 
-def _as_analytic(equilibrium: NetworkEquilibrium):
+def _as_analytic(equilibrium: NetworkEquilibrium) -> AnalyticSolution:
     """Adapt a network equilibrium to the two-bank solution interface.
 
     `path_from_game` was written against the pairwise solver and needs
@@ -432,8 +436,6 @@ def _as_analytic(equilibrium: NetworkEquilibrium):
     network result is wrapped. If the interfaces diverge further this
     should become a shared protocol instead.
     """
-    from moirai.engine.financial.central_banks import AnalyticSolution
-
     return AnalyticSolution(
         rates=equilibrium.rates,
         losses=equilibrium.losses,

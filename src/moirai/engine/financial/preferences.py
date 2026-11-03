@@ -36,7 +36,7 @@ The result is therefore DERIVED, not SOURCED.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -243,7 +243,9 @@ def implied_rate(
         output_response=output_response,
         neutral_real_rate=neutral_real_rate,
     )
-    return previous_rate + adjustment_speed * (target - previous_rate)
+    return cast(np.ndarray, previous_rate + adjustment_speed * (target - previous_rate))
+
+
 def to_quarterly(series: np.ndarray, *, how: str = "mean") -> np.ndarray:
     """Aggregate a monthly series to quarterly.
 

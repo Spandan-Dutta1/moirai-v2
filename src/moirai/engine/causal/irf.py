@@ -29,7 +29,7 @@ limitation is stated rather than hidden.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -72,7 +72,7 @@ class ImpulseResponse(BaseModel):
         """The (horizon + 1,) response path of one variable to one shock."""
         row = _index(self.variables, response_of, "variable")
         column = _index(self.shock_names, response_to, "shock")
-        return self.responses[:, row, column]
+        return cast(np.ndarray, self.responses[:, row, column])
 
     def peak(self, response_of: str, response_to: str) -> tuple[int, float]:
         """Horizon and value of the largest absolute response.

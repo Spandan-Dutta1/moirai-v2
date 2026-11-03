@@ -38,7 +38,7 @@ it did.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -216,9 +216,11 @@ def marginal_propensity_to_consume(
     buffer_months = np.maximum(population.wealth, 0.0) / monthly_income
 
     decay = np.exp(-buffer_months / parameters.mpc_wealth_scale)
-    return parameters.mpc_high_wealth + (
-        parameters.mpc_low_wealth - parameters.mpc_high_wealth
-    ) * decay
+    return cast(
+        np.ndarray,
+        parameters.mpc_high_wealth
+        + (parameters.mpc_low_wealth - parameters.mpc_high_wealth) * decay,
+    )
 
 
 def bank_rates(
@@ -296,7 +298,7 @@ def interest_income(population: Population, deposit_rate: float) -> np.ndarray:
     produced by the banking layer rather than assumed here. Borrowers pay
     most of a policy increase while savers receive part of it.
     """
-    return np.maximum(population.wealth, 0.0) * deposit_rate
+    return cast(np.ndarray, np.maximum(population.wealth, 0.0) * deposit_rate)
 
 
 def job_loss_probability(

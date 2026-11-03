@@ -36,7 +36,7 @@ when a solution lies far outside the historical range.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from enum import StrEnum
 from itertools import product
 from typing import Any
@@ -166,7 +166,7 @@ class Game(BaseModel):
                 f"no player named {name!r}; have {list(self.names)}"
             ) from None
 
-    def profiles(self):
+    def profiles(self) -> Iterator[tuple[float, ...]]:
         """Every combination of actions, in player order."""
         return product(*(p.actions for p in self.players))
 
