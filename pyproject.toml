@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "moirai"
 version = "0.1.0"
 description = "Local-first Economic Intelligence Platform"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
@@ -27,6 +27,10 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    "scipy-stubs",
+    "pandas-stubs",
+    "types-openpyxl",
+    "types-pytz",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -38,17 +42,27 @@ addopts = "-q --strict-markers"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B017"]   # frozen-model errors vary by library version
 "scripts/**" = ["E402"] # scratch scripts, not library code
 "src/moirai/engine/financial/commercial_banks.py" = ["E501"]  # bank data table
 
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
-
 [tool.mypy]
 python_version = "3.13"
 strict = true
 files = ["src/moirai"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["statsmodels", "statsmodels.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
