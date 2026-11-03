@@ -34,7 +34,7 @@ import re
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -125,7 +125,7 @@ class CsvSpec(BaseModel):
 # ---- period parsing -------------------------------------------------------
 
 
-def _fail(raw: str, expected: str) -> None:
+def _fail(raw: str, expected: str) -> NoReturn:
     raise IngestionError(f"could not read period {raw!r}; expected {expected}")
 
 

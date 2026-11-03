@@ -485,7 +485,7 @@ def evaluate_transmission(
     system: BankingSystem, targets: tuple[TransmissionTarget, ...] = EASING_TARGETS
 ) -> dict[str, Any]:
     """Compare the system's pass-through against the published figures."""
-    results = []
+    results: list[dict[str, Any]] = []
     for target in targets:
         if not system.by_group(target.group):
             continue

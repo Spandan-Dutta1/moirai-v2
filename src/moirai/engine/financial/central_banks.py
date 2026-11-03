@@ -47,6 +47,7 @@ from enum import StrEnum
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moirai.core.exceptions import EngineError
@@ -147,9 +148,10 @@ class CentralBank(BaseModel):
         government, so the cost of missing rises sharply at the edge
         rather than smoothly around the midpoint.
         """
-        if not self.has_band:
+        lower, upper = self.tolerance_lower, self.tolerance_upper
+        if lower is None or upper is None:
             return abs(inflation - self.inflation_target) < 0.005
-        return self.tolerance_lower <= inflation <= self.tolerance_upper
+        return lower <= inflation <= upper
 
     def external_gap(self, rate: float, other_rates: Sequence[float]) -> float:
         """The rate differential the external objective penalises.
@@ -200,11 +202,9 @@ class CentralBank(BaseModel):
         )
 
         # A band breach carries an explicit accountability cost.
-        if self.has_band and not self.within_band(inflation):
-            breach = min(
-                abs(inflation - self.tolerance_lower),
-                abs(inflation - self.tolerance_upper),
-            )
+        lower, upper = self.tolerance_lower, self.tolerance_upper
+        if lower is not None and upper is not None and not self.within_band(inflation):
+            breach = min(abs(inflation - lower), abs(inflation - upper))
             total += self.inflation_weight * breach**2
 
         return float(total)
@@ -925,7 +925,7 @@ def weight_sensitivity(
     *,
     vary: str,
     on: str,
-    values: Sequence[float],
+    values: Sequence[float] | npt.NDArray[np.float64],
     observe: str | None = None,
     spillovers: SpilloverParameters | None = None,
 ) -> WeightSensitivity:
