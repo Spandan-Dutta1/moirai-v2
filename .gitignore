@@ -23,3 +23,6 @@ artifacts/
 .env
 .vscode/
 .idea/
+# Generated code and results bundles (rebuilt on demand, not source)
+outputs/
+docs/all-code.md
