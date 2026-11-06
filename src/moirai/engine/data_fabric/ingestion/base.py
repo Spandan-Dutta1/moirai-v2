@@ -169,6 +169,11 @@ class SourceAdapter(ABC):
     #: Whether this source publishes revisions. False means one vintage only.
     supports_revisions: bool = False
 
+    #: Provenance of the latest fetch of each source series, by
+    #: source_series_id. Filled by fetch(), read by provenance_for(). None
+    #: until the first fetch, so no instance shares a class-level dict.
+    _fetched_provenance: dict[str, dict[str, Any]] | None = None
+
     @property
     @abstractmethod
     def source(self) -> Source:
@@ -216,6 +221,13 @@ class SourceAdapter(ABC):
                 f"{source_series_id!r} (content_hash={result.content_hash})"
             ) from err
 
+        if self._fetched_provenance is None:
+            self._fetched_provenance = {}
+        self._fetched_provenance[result.source_series_id] = {
+            **result.provenance(),
+            "archived": archive,
+        }
+
         log.info(
             "series_ingested",
             source=self.source.value,
@@ -225,6 +237,30 @@ class SourceAdapter(ABC):
             content_hash=result.content_hash,
         )
         return series
+
+    def provenance_for(self, series: TimeSeries) -> dict[str, Any]:
+        """Provenance of the latest fetch that produced `series`.
+
+        The record to store with it:
+
+            warehouse.upsert_series(series, provenance=adapter.provenance_for(series))
+
+        It carries the content hash, URL and fetch time, so a stored number
+        can be traced to the archived bytes it came from. "archived" says
+        whether those bytes were kept; when False only the hash remains.
+
+        Looked up by source_series_id rather than series_id, because FRED and
+        the World Bank replace the parsed metadata with the real metadata
+        after the fetch, and only the source identifier is certain to match.
+        """
+        key = series.metadata.source_series_id
+        records = self._fetched_provenance or {}
+        if key not in records:
+            raise IngestionError(
+                f"{type(self).__name__} has not fetched {key!r}, so it has no "
+                f"provenance to give for it"
+            )
+        return dict(records[key])
 
     def replay(self, payload_path: Path, result: FetchResult) -> TimeSeries:
         """Re-parse an archived response.
