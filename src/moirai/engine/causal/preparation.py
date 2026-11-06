@@ -19,6 +19,7 @@ Two things make this Moirai-specific rather than a generic wrapper:
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from datetime import date
 from enum import StrEnum
@@ -26,6 +27,7 @@ from typing import Any
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
+from statsmodels.tools.sm_exceptions import InterpolationWarning
 from statsmodels.tsa.stattools import adfuller, kpss
 
 from moirai.core.exceptions import EngineError
@@ -36,6 +38,13 @@ log = get_logger(__name__)
 
 #: Minimum usable observations. Below this, unit root tests are noise.
 MIN_OBSERVATIONS = 20
+
+#: statsmodels interpolates KPSS p-values from a table covering only this
+#: range and clips anything outside it. A reported 0.10 means "0.10 or more"
+#: and a reported 0.01 means "0.01 or less". A significance level outside the
+#: range cannot be judged against KPSS, so it is not accepted.
+KPSS_PVALUE_MIN = 0.01
+KPSS_PVALUE_MAX = 0.10
 
 
 class Transformation(StrEnum):
@@ -79,7 +88,7 @@ class StationarityResult(BaseModel):
     adf_pvalue: float
     kpss_statistic: float
     kpss_pvalue: float
-    significance: float = Field(default=0.05, gt=0, lt=1)
+    significance: float = Field(default=0.05, ge=KPSS_PVALUE_MIN, le=KPSS_PVALUE_MAX)
 
     @property
     def adf_says_stationary(self) -> bool:
@@ -87,7 +96,9 @@ class StationarityResult(BaseModel):
 
     @property
     def kpss_says_stationary(self) -> bool:
-        return self.kpss_pvalue > self.significance
+        # At the top of the table the true p-value is 0.10 or more, so it
+        # does not reject even at a 10% level.
+        return self.kpss_pvalue > self.significance or self.kpss_pvalue >= KPSS_PVALUE_MAX
 
     @property
     def verdict(self) -> StationarityVerdict:
@@ -156,7 +167,10 @@ class PreparedSeries(BaseModel):
     periods: tuple[date, ...]
     values: Any = Field(description="1-D numpy array, aligned with periods.")
     record: TransformationRecord
+    #: The test after transforming, when verify was on and enough data remained.
     stationarity: StationarityResult | None = None
+    #: The test before transforming: the one that chose the transformation.
+    initial_stationarity: StationarityResult | None = None
 
     def __len__(self) -> int:
         return len(self.periods)
@@ -213,6 +227,8 @@ def check_stationarity(
 
     Parameters
     ----------
+    significance
+        Between 0.01 and 0.10, the range the KPSS table covers.
     regression
         Deterministic terms: "c" for a constant, "ct" to add a trend.
         Use "ct" when the series plausibly trends around a linear path.
@@ -229,11 +245,11 @@ def check_stationarity(
     adf_statistic, adf_pvalue, *_ = adfuller(finite, regression=regression, autolag="AIC")
 
     # KPSS p-values are interpolated from a small table, so statsmodels warns
-    # at the edges. The warning is expected and the clipped value is correct.
-    import warnings
-
+    # at the edges. That warning is expected, and the clipped value is read
+    # correctly by kpss_says_stationary. Only that warning is silenced; any
+    # other one raised by the test is a real message and stays visible.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore", InterpolationWarning)
         kpss_regression = "ct" if regression == "ct" else "c"
         kpss_statistic, kpss_pvalue, *_ = kpss(finite, regression=kpss_regression, nlags="auto")
 
@@ -405,6 +421,7 @@ def prepare(
         values=transformed,
         record=record,
         stationarity=final,
+        initial_stationarity=initial,
     )
 
 
