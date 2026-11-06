@@ -18,12 +18,20 @@ with FredAdapter() as fred:
     )
 
 with Warehouse() as warehouse:
-    written = warehouse.upsert_series(series, provenance={"script": "check_warehouse"})
+    provenance = {**fred.provenance_for(series), "script": "check_warehouse"}
+    before = (
+        len(warehouse.provenance_history("gdpc1")) if warehouse.has_series("gdpc1") else 0
+    )
+    written = warehouse.upsert_series(series, provenance=provenance)
     print(f"\nwrote {written} observations")
+    added = len(warehouse.provenance_history("gdpc1")) - before
+    print("provenance records added:", added)
 
     # Idempotency: writing the same data again must not duplicate it.
     warehouse.upsert_series(series)
     print("after re-ingest:", warehouse.count_observations("gdpc1"), "rows")
+    kept = warehouse.get_provenance("gdpc1") == provenance
+    print("provenance kept after re-ingest without it:", kept)
 
     print("series in warehouse:", warehouse.list_series())
     print()

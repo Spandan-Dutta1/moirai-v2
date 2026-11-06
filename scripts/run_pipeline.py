@@ -101,7 +101,9 @@ with FredAdapter() as fred:
 
 with Warehouse() as warehouse:
     for item in series:
-        warehouse.upsert_series(item, provenance={"pipeline": "run_pipeline"})
+        warehouse.upsert_series(
+            item, provenance={**fred.provenance_for(item), "pipeline": "run_pipeline"}
+        )
     stored = warehouse.list_series()
 
 for item in series:

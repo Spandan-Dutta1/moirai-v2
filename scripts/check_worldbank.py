@@ -22,6 +22,6 @@ for observation in gdp_growth.observations[-6:]:
 
 # The abstraction test: identical warehouse code, a completely different source.
 with Warehouse() as warehouse:
-    warehouse.upsert_series(gdp_growth)
+    warehouse.upsert_series(gdp_growth, provenance=wb.provenance_for(gdp_growth))
     print()
     print("series in warehouse:", warehouse.list_series())

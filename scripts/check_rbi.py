@@ -17,9 +17,12 @@ if not path.exists():
 print(f"reading {path.name}\n")
 
 series_list = []
+provenance = {}
 for spec in RBI_MONTHLY_SPECS:
-    series = ManualExcelAdapter(spec).ingest(path)
+    adapter = ManualExcelAdapter(spec)
+    series = adapter.ingest(path)
     series_list.append(series)
+    provenance[spec.series_id] = adapter.provenance_for(series)
 
     present = [o for o in series.observations if not o.is_missing]
     print(f"{spec.series_id}")
@@ -47,6 +50,11 @@ print()
 with Warehouse() as warehouse:
     for series in series_list:
         warehouse.upsert_series(
-            series, provenance={"publisher": "RBI", "file": path.name}
+            series,
+            provenance={
+                **provenance[series.metadata.series_id],
+                "publisher": "RBI",
+                "file": path.name,
+            },
         )
     print("warehouse:", warehouse.list_series())

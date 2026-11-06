@@ -73,9 +73,12 @@ if not PATH.exists():
 
 specs = [RBI_IIP, RBI_CPI_INFLATION, RBI_REPO_RATE, RBI_GSEC_10Y]
 ingested = []
+provenance = {}
 for spec in specs:
-    series = ManualExcelAdapter(spec).ingest(PATH)
+    adapter = ManualExcelAdapter(spec)
+    series = adapter.ingest(PATH)
     ingested.append(series)
+    provenance[spec.series_id] = adapter.provenance_for(series)
     present = [o for o in series.observations if not o.is_missing]
     print(
         f"  {series.metadata.series_id:<18} {len(present):>4} obs  "
@@ -86,7 +89,12 @@ for spec in specs:
 with Warehouse() as warehouse:
     for series in ingested:
         warehouse.upsert_series(
-            series, provenance={"publisher": "RBI", "file": PATH.name}
+            series,
+            provenance={
+                **provenance[series.metadata.series_id],
+                "publisher": "RBI",
+                "file": PATH.name,
+            },
         )
 
 print("\n  downloaded by hand, hashed, archived with a provenance sidecar")
