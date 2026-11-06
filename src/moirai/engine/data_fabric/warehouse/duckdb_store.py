@@ -5,15 +5,21 @@ DuckDB is embedded and columnar: one file, no server, scans optimised for
 analytical queries over long columns. That matches both the local-first
 requirement and the shape of time series work.
 
-Two tables:
+Three tables:
 
     observations    the bitemporal facts
-    series_catalog  metadata and provenance, one row per series
+    series_catalog  metadata and the latest provenance, one row per series
+    provenance_log  every distinct provenance record, append-only
 
 The composite primary key (series_id, period, known_at, revision) is
 bitemporality expressed in SQL. It permits many vintages of one period
 while forbidding two values for the same vintage, which is the same
 invariant TimeSeries enforces in memory.
+
+Provenance is logged rather than overwritten. A series ingested in May and
+again in August keeps both records, so a number from the May vintage can
+still be traced to the bytes it came from. The log arrived in schema
+version 2; files written earlier are upgraded when first opened.
 
 as_of queries are pushed into SQL rather than filtered in Python, because
 the warehouse will eventually hold far more rows than fit comfortably in
@@ -47,7 +53,7 @@ from moirai.engine.data_fabric.series.models import (
 
 log = get_logger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -85,6 +91,19 @@ CREATE TABLE IF NOT EXISTS observations (
 
 CREATE INDEX IF NOT EXISTS idx_observations_series_period
     ON observations (series_id, period);
+
+-- Schema version 2. Rows are inserted, never updated; identical records
+-- are stored once. seq orders the history, because two ingests can share a
+-- timestamp at the resolution of the Windows clock.
+CREATE SEQUENCE IF NOT EXISTS provenance_log_seq;
+
+CREATE TABLE IF NOT EXISTS provenance_log (
+    series_id    VARCHAR     NOT NULL,
+    provenance   VARCHAR     NOT NULL,
+    seq          BIGINT      NOT NULL DEFAULT nextval('provenance_log_seq'),
+    recorded_at  TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (series_id, provenance)
+);
 """
 
 
@@ -130,6 +149,23 @@ class Warehouse:
             "INSERT INTO schema_meta (key, value) VALUES ('version', ?) "
             "ON CONFLICT (key) DO NOTHING",
             [str(SCHEMA_VERSION)],
+        )
+        # A file written before version 2 has provenance only in the catalog.
+        # Copy it into the log so its history starts with what it already had.
+        # Idempotent, so it is safe to run on every open.
+        self._connection.execute(
+            """
+            INSERT INTO provenance_log (series_id, provenance, recorded_at)
+            SELECT series_id, provenance, updated_at
+            FROM series_catalog
+            WHERE provenance <> '{}'
+            ON CONFLICT DO NOTHING
+            """
+        )
+        self._connection.execute(
+            "UPDATE schema_meta SET value = ? "
+            "WHERE key = 'version' AND CAST(value AS INTEGER) < ?",
+            [str(SCHEMA_VERSION), SCHEMA_VERSION],
         )
 
     @property
@@ -179,9 +215,15 @@ class Warehouse:
         Re-ingesting identical data is a no-op rather than a duplicate,
         because the primary key already identifies each vintage. Returns
         the number of observation rows written.
+
+        Provenance, when given, is appended to provenance_log and becomes the
+        catalog's latest record. When omitted, the stored record is kept: an
+        upsert that does not know where the data came from must not erase
+        what an earlier one recorded.
         """
         self._require_writable()
         metadata = series.metadata
+        provenance_json = json.dumps(provenance or {}, sort_keys=True)
 
         with self.transaction():
             self._connection.execute(
@@ -205,7 +247,10 @@ class Warehouse:
                     notes = excluded.notes,
                     license = excluded.license,
                     retrieved_at = excluded.retrieved_at,
-                    provenance = excluded.provenance,
+                    provenance = CASE
+                        WHEN excluded.provenance = '{}' THEN series_catalog.provenance
+                        ELSE excluded.provenance
+                    END,
                     updated_at = now()
                 """,
                 [
@@ -223,9 +268,19 @@ class Warehouse:
                     metadata.notes,
                     metadata.license,
                     metadata.retrieved_at,
-                    json.dumps(provenance or {}, sort_keys=True),
+                    provenance_json,
                 ],
             )
+
+            if provenance:
+                self._connection.execute(
+                    """
+                    INSERT INTO provenance_log (series_id, provenance, recorded_at)
+                    VALUES (?, ?, now())
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [metadata.series_id, provenance_json],
+                )
 
             rows = [
                 (metadata.series_id, o.period, o.known_at, o.revision, o.value)
@@ -256,6 +311,9 @@ class Warehouse:
         with self.transaction():
             self._connection.execute(
                 "DELETE FROM observations WHERE series_id = ?", [series_id]
+            )
+            self._connection.execute(
+                "DELETE FROM provenance_log WHERE series_id = ?", [series_id]
             )
             self._connection.execute(
                 "DELETE FROM series_catalog WHERE series_id = ?", [series_id]
@@ -313,6 +371,16 @@ class Warehouse:
         if row is None:
             raise DataFabricError(f"series {series_id!r} is not in the warehouse")
         return cast(dict[str, Any], json.loads(row[0]))
+
+    def provenance_history(self, series_id: str) -> tuple[dict[str, Any], ...]:
+        """Every distinct provenance record of a series, oldest first."""
+        if not self.has_series(series_id):
+            raise DataFabricError(f"series {series_id!r} is not in the warehouse")
+        rows = self._connection.execute(
+            "SELECT provenance FROM provenance_log WHERE series_id = ? ORDER BY seq",
+            [series_id],
+        ).fetchall()
+        return tuple(cast(dict[str, Any], json.loads(row[0])) for row in rows)
 
     def _build(self, series_id: str, rows: Sequence[tuple[Any, ...]]) -> TimeSeries:
         observations = [
@@ -429,5 +497,3 @@ class Warehouse:
 
     def __repr__(self) -> str:
         return f"Warehouse(path={self.path!r}, read_only={self._read_only})"
-
-
