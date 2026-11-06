@@ -70,6 +70,7 @@ from moirai.engine.financial.network import (
     FED_TO_INDIA_EXCHANGE_FLOOR,
     SpilloverMatrix,
 )
+from moirai.engine.financial.starting_state import observed_starting_inflation
 from moirai.engine.scenarios import HEADLINE_SCENARIO, run_scenario
 
 configure_logging("WARNING")
@@ -179,7 +180,10 @@ print("    a clearly signed effect can still be a small one")
 rule("LAYER 1a  The central bank game")
 
 scenario = HEADLINE_SCENARIO
-central_banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+with Warehouse() as _warehouse:
+    rbi_observed, rbi_start = observed_starting_inflation(RBI, _warehouse)
+print(f"  {rbi_start.summary()}")
+central_banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, rbi_observed)
 spillovers = SpilloverMatrix.from_literature(DEFAULT_TIERS)
 
 population = generate_population(

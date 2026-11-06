@@ -9,6 +9,7 @@ from moirai.engine.causal.irf import impulse_responses
 from moirai.engine.causal.preparation import align, prepare
 from moirai.engine.causal.var import estimate_var
 from moirai.engine.data_fabric.ingestion.fred import FredAdapter
+from moirai.engine.data_fabric.warehouse.duckdb_store import Warehouse
 from moirai.engine.economy.calibration import evaluate
 from moirai.engine.economy.households import PopulationParameters, generate_population
 from moirai.engine.financial.central_banks import (
@@ -20,6 +21,7 @@ from moirai.engine.financial.central_banks import (
 )
 from moirai.engine.financial.commercial_banks import INDIAN_BANKING_SYSTEM
 from moirai.engine.financial.network import DEFAULT_TIERS, SpilloverMatrix
+from moirai.engine.financial.starting_state import observed_starting_inflation
 from moirai.engine.scenarios import DEFAULT_SCENARIOS, compare, run_scenario
 
 warnings.filterwarnings("ignore")
@@ -42,7 +44,10 @@ var = estimate_var(data, names, n_lags=12, periods=periods)
 report = diagnose(var, portmanteau_lags=24)
 irf = impulse_responses(identify_cholesky(var, ordering=names), horizon=36)
 
-banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, RBI)
+with Warehouse() as _warehouse:
+    rbi_observed, rbi_start = observed_starting_inflation(RBI, _warehouse)
+print(f"  {rbi_start.summary()}")
+banks = (FED, ECB, BANK_OF_JAPAN, BANK_OF_ENGLAND, rbi_observed)
 spillovers = SpilloverMatrix.from_literature(DEFAULT_TIERS)
 population = generate_population(PopulationParameters(n_households=200_000, seed=1))
 calibration = evaluate(population)
