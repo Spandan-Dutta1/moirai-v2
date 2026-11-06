@@ -79,6 +79,20 @@ MONTHS = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
+_FULL_MONTH_NAMES = (
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+)
+
+#: Every accepted spelling of a month: the full name, the three-letter
+#: abbreviation, and "sept". The whole word is looked up, so "Junk" is
+#: rejected rather than read as June.
+MONTH_NAMES = {
+    **{name: number for number, name in enumerate(_FULL_MONTH_NAMES, start=1)},
+    **{name[:3]: number for number, name in enumerate(_FULL_MONTH_NAMES, start=1)},
+    "sept": 9,
+}
+
 
 class CsvSpec(BaseModel):
     """How to read one downloaded file into one series.
@@ -129,6 +143,24 @@ def _fail(raw: str, expected: str) -> NoReturn:
     raise IngestionError(f"could not read period {raw!r}; expected {expected}")
 
 
+def _check_fiscal_end(text: str, start_year: int, end_raw: str) -> None:
+    """The end year of a fiscal label must be the year after the start.
+
+    "2019-20" and "2019-2020" are FY2019-20; "1999-00" is FY1999-2000. A
+    label such as "2019-25" is a typo or a multi-year span, and reading it
+    as FY2019-20 would put the number in the wrong year without any sign.
+    """
+    end = int(end_raw)
+    if len(end_raw) == 2:
+        consecutive = end == (start_year + 1) % 100
+    elif len(end_raw) == 4:
+        consecutive = end == start_year + 1
+    else:
+        consecutive = False
+    if not consecutive:
+        _fail(text, "an end year one after the start, such as 2019-20 or 2019-2020")
+
+
 def parse_period(raw: str, period_format: PeriodFormat) -> date:
     """Turn a period label into the date the period begins.
 
@@ -152,7 +184,7 @@ def parse_period(raw: str, period_format: PeriodFormat) -> date:
         match = re.match(r"^([A-Za-z]{3,9})[\s\-/]+(\d{2,4})$", text)
         if not match:
             _fail(text, "a month name and year such as Mar-24")
-        month = MONTHS.get(match.group(1)[:3].lower())
+        month = MONTH_NAMES.get(match.group(1).lower())
         if month is None:
             _fail(text, "a recognisable month name")
         year = int(match.group(2))
@@ -170,7 +202,9 @@ def parse_period(raw: str, period_format: PeriodFormat) -> date:
         match = re.fullmatch(r"(\d{4})\s*[-/]\s*(\d{2,4})", text)
         if not match:
             _fail(text, "an Indian fiscal year such as 2019-20")
-        return date(int(match.group(1)), 4, 1)
+        start_year = int(match.group(1))
+        _check_fiscal_end(text, start_year, match.group(2))
+        return date(start_year, 4, 1)
 
     if period_format is PeriodFormat.CALENDAR_QUARTER:
         match = re.fullmatch(r"(?:(\d{4})\s*[-\s]?Q([1-4])|Q([1-4])\s*[-\s]?(\d{4}))", text, re.I)
@@ -187,6 +221,7 @@ def parse_period(raw: str, period_format: PeriodFormat) -> date:
             _fail(text, "an Indian fiscal quarter such as Q1 2024-25")
         quarter = int(match.group(1))
         start_year = int(match.group(2))
+        _check_fiscal_end(text, start_year, match.group(3))
         month = 4 + 3 * (quarter - 1)
         if month > 12:
             month -= 12
