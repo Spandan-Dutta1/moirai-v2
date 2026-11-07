@@ -50,7 +50,8 @@ $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $Marker = '.compare_runs'
 $NetworkPattern = 'getaddrinfo failed|Errno 11001|Name or service not known|' +
                   'Temporary failure in name resolution|ConnectError|ConnectTimeout|' +
-                  'ReadTimeout|timed out|Too Many Requests|\b429\b|' +
+                  'ReadTimeout|timed out|Too Many Requests|\b429\b|HTTP 5\d\d|Bad Gateway|' +
+                  'Service Unavailable|Gateway Time-?out|' +
                   'not available \(IngestionError\)'
 
 # ---------------------------------------------------------------- preflight
