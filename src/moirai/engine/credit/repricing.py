@@ -12,11 +12,11 @@ model, and they are what the August 2023 reset framework was about.
              then every reset_months after.
     how much the policy change since the tape's date, times the benchmark's
              pass-through: 1.0 for EBLR (the repo rate plus a fixed spread),
-             a declared fraction for internal benchmarks.
+             a measured fraction for internal benchmarks.
     how      tenure first (keep the EMI, extend the tenure) or EMI first
              (keep the tenure, recompute the EMI). Under tenure first an
-             extension may not run past the retirement age or the longest
-             tenure allowed; where it would, the EMI rises instead.
+             extension may not run past the lender's maximum age at maturity
+             or its longest tenure; where it would, the EMI rises instead.
 
 Then each month interest accrues on the outstanding principal and the EMI is
 paid. Income is held at the tape's value over the horizon.
@@ -26,10 +26,19 @@ Flags, per loan over the horizon:
     tenure_capped         an extension hit the age or tenure limit, so the EMI
                           was forced up
     negative_amortisation the EMI did not cover a month's interest
-    dsti_breach           the borrower's total EMIs exceeded the DSTI threshold
+    dsti_above_at_start   the borrower's DSTI was already above the threshold
+                          on the tape's date
+    dsti_pushed_across    the borrower started at or below the threshold and
+                          the path took them above it
 
-The defaults marked ASSUMED are not calibrated yet; RepricingParameters records
-which they are.
+The two DSTI flags are kept apart because Indian books start high: Bajaj
+Housing Finance reports an average FOIR of 59 percent at origination, so a
+single flag would mark most of a prime book before any shock.
+
+Each default on RepricingParameters names its source. The pass-through for
+internal benchmarks is one number, although the evidence shows it grows with
+time; a lagged estimate on the RBI's monthly MCLR and repo series is the next
+refinement.
 """
 
 from __future__ import annotations
@@ -52,31 +61,67 @@ class ResetPolicy(StrEnum):
 
 
 class RepricingParameters(BaseModel):
-    """How the book reprices. Defaults marked ASSUMED are not calibrated."""
+    """How the book reprices. Each default names its source."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     eblr_pass_through: float = Field(
-        default=1.0, ge=0.0, le=1.5, description="Contractual: repo plus a fixed spread."
-    )
-    internal_pass_through: float = Field(
-        default=0.6,
+        default=1.0,
         ge=0.0,
         le=1.5,
-        description="ASSUMED. MCLR and base-rate loans; to calibrate on RBI lending-rate data.",
+        description=(
+            "Contractual. RBI, September 2019: the repo rate plus a spread fixed for "
+            "the loan, reset at least every three months."
+        ),
+    )
+    internal_pass_through: float = Field(
+        default=0.62,
+        ge=0.0,
+        le=1.5,
+        description=(
+            "SOURCED. The 1-year median MCLR moved 155bp for 250bp of repo in the "
+            "2019-21 easing (RBI Bulletin, July 2021) and in the 2022-24 tightening "
+            "(NIBM, 2024). It grows with time: about 0.36 some 15 months into the "
+            "2025 easing, 0.70 after the full tightening to November 2024."
+        ),
     )
     reset_policy: ResetPolicy = Field(
         default=ResetPolicy.TENURE_FIRST,
-        description="ASSUMED. Lenders extended tenures first in 2022-23.",
+        description=(
+            "SOURCED for 2022-23: lenders extended tenure first (RBI statement of "
+            "10 August 2023, 'unreasonable elongation of tenor'). Since the August "
+            "2023 framework the borrower chooses, so forward runs report both."
+        ),
     )
-    retirement_age: float = Field(
-        default=60.0, ge=40.0, le=80.0, description="ASSUMED. Lender policies vary, 60 to 70."
+    max_age_at_maturity: float = Field(
+        default=70.0,
+        ge=40.0,
+        le=85.0,
+        description=(
+            "SOURCED. The age by which the loan must be repaid: 70 at SBI (30 years "
+            "or age 70, whichever is earlier), about 65 at HDFC. A lender's rule, "
+            "set per book; not the household layer's retirement age."
+        ),
     )
     max_tenure_months: int = Field(
-        default=360, ge=12, le=600, description="ASSUMED. Longest remaining tenure allowed."
+        default=360,
+        ge=12,
+        le=600,
+        description=(
+            "SOURCED. 30 years at SBI and HDFC. Applied to the remaining tenure "
+            "because the tape has no months on book, so it bounds an extension "
+            "from above."
+        ),
     )
     dsti_threshold: float = Field(
-        default=0.5, gt=0.0, le=2.0, description="ASSUMED. A common underwriting ceiling."
+        default=0.5,
+        gt=0.0,
+        le=2.0,
+        description=(
+            "SOURCED. Mortgage default risk is flat below 50 percent DSTI and rises "
+            "above it (Nier, Popa, Shamloo and Voinea, IMF WP/19/182, loan-level "
+            "data). Measured on net income, as the tape's income is."
+        ),
     )
 
     def to_ledger_dict(self) -> dict[str, Any]:
@@ -96,7 +141,10 @@ class RepricingResult(BaseModel):
     borrower_dsti: Any = Field(description="(n, H+1) the borrower's DSTI, per loan row.")
     tenure_capped: Any = Field(description="(n,) an extension hit a limit.")
     negative_amortisation: Any = Field(description="(n,) EMI below a month's interest.")
-    dsti_breach: Any = Field(description="(n,) DSTI above the threshold in some month.")
+    dsti_above_at_start: Any = Field(description="(n,) DSTI above the threshold in month 0.")
+    dsti_pushed_across: Any = Field(
+        description="(n,) at or below the threshold in month 0, above it later."
+    )
 
     @property
     def horizon(self) -> int:
@@ -105,9 +153,11 @@ class RepricingResult(BaseModel):
     def summary(self) -> dict[str, float]:
         emi = np.asarray(self.emi)
         start, peak = emi[:, 0], emi.max(axis=1)
-        extended = np.asarray(self.remaining_months)[:, -1] + self.horizon - np.asarray(
-            self.remaining_months
-        )[:, 0]
+        extended = (
+            np.asarray(self.remaining_months)[:, -1]
+            + self.horizon
+            - np.asarray(self.remaining_months)[:, 0]
+        )
         return {
             "loans": float(emi.shape[0]),
             "share_emi_up": float(np.mean(peak > start * (1 + 1e-9))),
@@ -115,7 +165,8 @@ class RepricingResult(BaseModel):
             "mean_months_extended": float(np.mean(np.maximum(extended, 0))),
             "share_tenure_capped": float(np.mean(self.tenure_capped)),
             "share_negative_amortisation": float(np.mean(self.negative_amortisation)),
-            "share_dsti_breach": float(np.mean(self.dsti_breach)),
+            "share_dsti_above_at_start": float(np.mean(self.dsti_above_at_start)),
+            "share_dsti_pushed_across": float(np.mean(self.dsti_pushed_across)),
         }
 
 
@@ -124,9 +175,7 @@ def _months_to_repay(principal: np.ndarray, annual_rate: np.ndarray, emi: np.nda
     r = annual_rate / 12.0
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = principal * r / emi
-        months = np.where(
-            r > 0, -np.log(1.0 - ratio) / np.log(1.0 + r), principal / emi
-        )
+        months = np.where(r > 0, -np.log(1.0 - ratio) / np.log(1.0 + r), principal / emi)
     months = np.where((r > 0) & (ratio >= 1.0), np.inf, months)
     return np.ceil(months - 1e-9)
 
@@ -190,7 +239,8 @@ def reprice(
             )
             age = tape.borrower_age + t / 12.0
             limit = np.minimum(
-                np.floor((parameters.retirement_age - age) * 12.0), parameters.max_tenure_months
+                np.floor((parameters.max_age_at_maturity - age) * 12.0),
+                parameters.max_tenure_months,
             )
             limit = np.maximum(limit, m)  # a reset never shortens the tenure it may use
             if parameters.reset_policy is ResetPolicy.EMI_FIRST:
@@ -214,6 +264,9 @@ def reprice(
         e = np.where(repaid, 0.0, e)
         record(t)
 
+    above_at_start = dsti[:, 0] > parameters.dsti_threshold
+    pushed_across = ~above_at_start & (dsti[:, 1:] > parameters.dsti_threshold).any(axis=1)
+
     return RepricingResult(
         parameters=parameters,
         rate=rate,
@@ -223,5 +276,6 @@ def reprice(
         borrower_dsti=dsti,
         tenure_capped=capped,
         negative_amortisation=negative,
-        dsti_breach=(dsti > parameters.dsti_threshold).any(axis=1),
+        dsti_above_at_start=above_at_start,
+        dsti_pushed_across=pushed_across,
     )

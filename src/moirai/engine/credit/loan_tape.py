@@ -21,7 +21,9 @@ The rules come from how Indian retail loans work:
     tenure extensions of 2022-23 that led to the RBI's August 2023 reset
     framework, and it is a signal to report, not bad data.
   * DSTI (debt service to income) is a borrower's measure: every EMI the
-    borrower pays, against one income.
+    borrower pays, against one income. borrower_income is annual net
+    (take-home) income, because the threshold the default studies find is
+    measured on net income (IMF WP/19/182).
 
 The core household arrays are untouched. A tape becomes a Population through
 an adapter, and its loan-level mechanics live in this package.
