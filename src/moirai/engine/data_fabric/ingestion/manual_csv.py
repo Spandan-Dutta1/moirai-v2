@@ -14,7 +14,7 @@ mapping is declared per file rather than inferred. A CsvSpec says which
 column holds the period, which holds the value, how the period is
 written, and what frequency it represents.
 
-Two India-specific problems this exists to handle:
+Three problems this exists to handle:
 
   * Fiscal years. "2019-20" means April 2019 to March 2020. Read as a
     calendar year it misaligns against calendar-year data by up to nine
@@ -25,6 +25,12 @@ Two India-specific problems this exists to handle:
     produces a phantom shock. The spec records known rebase dates so the
     break travels with the data instead of being discovered later by
     someone puzzled at an impulse response.
+
+  * Day and month order. 03/04/2024 is 3 April in India and 4 March in the
+    United States, and nothing in a file of such dates says which: every
+    date up to the 12th parses either way. ISO dates are the only ones read
+    without a declaration; a slashed date must be declared day-first or
+    month-first (ADR 034).
 """
 
 from __future__ import annotations
@@ -60,8 +66,12 @@ MISSING_MARKERS = frozenset({"", "-", "--", "n/a", "na", "nil", ".", "..", "*"})
 class PeriodFormat(StrEnum):
     """How a period is written in the source file."""
 
-    #: 2024-03-01, 2024-03, or 01/03/2024 handled by ISO-ish parsing.
+    #: 2024-03-01 or 2024-03. Nothing else: a slashed date is ambiguous.
     ISO_DATE = "iso_date"
+    #: 01/03/2024 or 01-03-2024, day first: 1 March 2024 (Indian and European).
+    DAY_MONTH_YEAR = "day_month_year"
+    #: 03/01/2024 or 03-01-2024, month first: 1 March 2024 (United States).
+    MONTH_DAY_YEAR = "month_day_year"
     #: Mar-24, Mar-2024, March 2024.
     MONTH_NAME_YEAR = "month_name_year"
     #: 2024 as a calendar year.
@@ -92,6 +102,23 @@ MONTH_NAMES = {
     **{name[:3]: number for number, name in enumerate(_FULL_MONTH_NAMES, start=1)},
     "sept": 9,
 }
+
+
+#: The strptime patterns each date format accepts, and an example for errors.
+DATE_PATTERNS: dict[PeriodFormat, tuple[tuple[str, ...], str]] = {
+    PeriodFormat.ISO_DATE: (("%Y-%m-%d", "%Y-%m"), "an ISO date such as 2024-03-01"),
+    PeriodFormat.DAY_MONTH_YEAR: (
+        ("%d/%m/%Y", "%d-%m-%Y"),
+        "a day-first date such as 01/03/2024 for 1 March",
+    ),
+    PeriodFormat.MONTH_DAY_YEAR: (
+        ("%m/%d/%Y", "%m-%d-%Y"),
+        "a month-first date such as 03/01/2024 for 1 March",
+    ),
+}
+
+#: A date written with slashes or dashes around a four-digit year at the end.
+_SLASHED_DATE = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{4}")
 
 
 class CsvSpec(BaseModel):
@@ -172,13 +199,20 @@ def parse_period(raw: str, period_format: PeriodFormat) -> date:
     if not text:
         raise IngestionError("period cell is empty")
 
-    if period_format is PeriodFormat.ISO_DATE:
-        for pattern in ("%Y-%m-%d", "%Y-%m", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+    if period_format in DATE_PATTERNS:
+        patterns, example = DATE_PATTERNS[period_format]
+        for pattern in patterns:
             try:
                 return datetime.strptime(text, pattern).date().replace(day=1)
             except ValueError:
                 continue
-        _fail(text, "an ISO-like date")
+        if period_format is PeriodFormat.ISO_DATE and _SLASHED_DATE.fullmatch(text):
+            _fail(
+                text,
+                f"{example}; a day/month/year file must declare DAY_MONTH_YEAR and a "
+                f"month/day/year file MONTH_DAY_YEAR",
+            )
+        _fail(text, example)
 
     if period_format is PeriodFormat.MONTH_NAME_YEAR:
         match = re.match(r"^([A-Za-z]{3,9})[\s\-/]+(\d{2,4})$", text)
