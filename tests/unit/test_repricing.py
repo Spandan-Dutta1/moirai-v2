@@ -207,3 +207,29 @@ def test_the_summary_reports_the_book() -> None:
 def test_a_malformed_policy_path_is_refused(path: Any) -> None:
     with pytest.raises(EngineError):
         reprice(tape(loan()), path)
+
+
+# ---- income over the horizon (ADR 035) -------------------------------------------
+
+
+def test_income_is_held_constant_by_default() -> None:
+    """The conventional stress test, and what every earlier result was run on."""
+    assert RepricingParameters().income_growth == 0.0
+    result = reprice(tape(loan()), FLAT)
+    assert result.borrower_dsti[0, -1] == pytest.approx(result.borrower_dsti[0, 0])
+
+
+def test_growing_income_lowers_debt_service_over_the_horizon() -> None:
+    growing = RepricingParameters(income_growth=0.10)
+    result = reprice(tape(loan()), FLAT, growing)
+    assert result.borrower_dsti[0, -1] < result.borrower_dsti[0, 0]
+    assert result.borrower_dsti[0, -1] == pytest.approx(
+        result.borrower_dsti[0, 0] / 1.10 ** (12 / 12)
+    )
+
+
+def test_income_growth_can_outrun_a_rate_rise() -> None:
+    """The 2022-23 question: +100bp against 10 percent nominal income growth."""
+    params = RepricingParameters(income_growth=0.10, reset_policy=ResetPolicy.EMI_FIRST)
+    result = reprice(tape(loan()), STEP, params)
+    assert result.borrower_dsti[0, -1] < result.borrower_dsti[0, 0]

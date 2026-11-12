@@ -65,8 +65,8 @@ ASSUMED = {
     "original_tenure": "home 180, 240 or 300 months; vehicle 60; personal 36, 48 or 60",
     "seasoning": "months since origination uniform over the tenure",
     "spreads": (
-        "EBLR home: repo + 2.00 to 3.25pp; internal home: median MCLR + 0 to 0.50pp; "
-        "vehicle 8.5 to 11%; personal 10.5 to 16%"
+        "EBLR home: repo plus the profile's spread range; internal home: the profile's "
+        "reference rate + 0 to 0.50pp; vehicle 8.5 to 11%; personal 10.5 to 16%"
     ),
     "reset_timing": "months to the next reset uniform within the reset period",
     "age_shape": "normal, sd 7, clipped to 21 to 60 at origination",
@@ -94,6 +94,18 @@ class BookProfile(BaseModel):
     eblr_share: float = Field(ge=0.0, le=1.0, description="EBLR share of floating loans.")
     mean_dsti: float = Field(gt=0.0, lt=1.0, description="Average DSTI (FOIR).")
     home_ticket: float = Field(default=AVERAGE_TICKET[Product.HOME], gt=0.0)
+    repo_rate: float = Field(
+        default=REPO_RATE, gt=0.0, le=0.25, description="The policy rate on the book's date."
+    )
+    internal_reference_rate: float = Field(
+        default=MEDIAN_MCLR,
+        gt=0.0,
+        le=0.25,
+        description="The internal benchmark MCLR loans are priced off.",
+    )
+    eblr_spread: tuple[float, float] = Field(
+        default=(0.02, 0.0325), description="Range of spreads over the repo rate for EBLR loans."
+    )
     source: str
 
 
@@ -119,6 +131,27 @@ AFFORDABLE = BookProfile(
     home_ticket=1_200_000.0,
     source="FOIR about 40% (Home First); home only; ticket Rs 12 lakh ASSUMED",
 )
+#: The book as it stood when the 2022-23 tightening began, for the backtest
+#: (ADR 035). Home loans only: the housing benchmark mix is published by sector
+#: for December 2021, and the FY22 product mix is not reachable. The ticket is
+#: not period-sourced; it scales rupee totals and nothing the backtest tests,
+#: which `test_the_crossing_share_does_not_depend_on_the_ticket` pins.
+APRIL_2022 = BookProfile(
+    name="april_2022",
+    portfolio={Product.HOME: 1.0},
+    eblr_share=0.637,
+    mean_dsti=0.59,
+    repo_rate=0.04,
+    internal_reference_rate=0.0725,
+    eblr_spread=(0.0325, 0.0375),
+    source=(
+        "repo 4.00% (RBI, 1 April 2022); EBLR 58.2% against MCLR 33.1% of housing loans, "
+        "so 63.7% of floating (RBI Bulletin, April 2022, Table 3, Dec-21); housing WALR "
+        "outstanding 7.49% (RBI, Feb-22) is what the spreads are set to reproduce; "
+        "FOIR 59% (Bajaj Housing Finance, Q4 FY21); ticket not period-sourced"
+    ),
+)
+
 PROFILES = (PSB, PRIVATE, AFFORDABLE)
 
 
@@ -152,12 +185,15 @@ def _draw(
     if product is Product.HOME:
         eblr = rng.random(k) < profile.eblr_share
         benchmark = np.where(eblr, Benchmark.EBLR.value, Benchmark.MCLR.value)
+        low_spread, high_spread = profile.eblr_spread
         rate = np.where(
             eblr,
-            REPO_RATE + rng.uniform(0.02, 0.0325, k),
-            MEDIAN_MCLR + rng.uniform(0.0, 0.005, k),
+            profile.repo_rate + rng.uniform(low_spread, high_spread, k),
+            profile.internal_reference_rate + rng.uniform(0.0, 0.005, k),
         )
-        spread = np.where(eblr, rate - REPO_RATE, rate - MEDIAN_MCLR)
+        spread = np.where(
+            eblr, rate - profile.repo_rate, rate - profile.internal_reference_rate
+        )
         reset_months = np.where(eblr, 3, 12)
         next_reset = np.floor(rng.random(k) * reset_months).astype(int)
     else:

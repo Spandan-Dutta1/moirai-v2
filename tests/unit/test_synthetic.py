@@ -13,6 +13,7 @@ from moirai.engine.credit.loan_tape import Benchmark, Product
 from moirai.engine.credit.repricing import reprice
 from moirai.engine.credit.synthetic import (
     AFFORDABLE,
+    APRIL_2022,
     AVERAGE_TICKET,
     PRIVATE,
     PSB,
@@ -114,3 +115,40 @@ def test_the_book_runs_through_the_reset_engine() -> None:
 def test_a_tiny_book_is_refused() -> None:
     with pytest.raises(EngineError):
         generate(PSB, n=10)
+
+
+# ---- the April 2022 book, for the backtest (ADR 035) ---------------------------
+
+
+def test_the_april_2022_book_carries_its_sourced_rate_environment() -> None:
+    """Repo 4.00% on 1 April 2022; 63.7% of floating housing loans on EBLR."""
+    assert APRIL_2022.repo_rate == pytest.approx(0.04)
+    assert APRIL_2022.eblr_share == pytest.approx(0.637, abs=0.001)
+    assert APRIL_2022.mean_dsti == pytest.approx(0.59)
+
+
+def test_the_2026_books_are_unchanged_by_the_rate_environment_becoming_a_field() -> None:
+    assert PSB.repo_rate == pytest.approx(REPO_RATE)
+    assert PSB.eblr_spread == (0.02, 0.0325)
+
+
+def test_the_april_2022_book_reproduces_the_rbi_housing_lending_rate() -> None:
+    """WALR on outstanding housing loans was 7.49% in February 2022."""
+    tape = generate(APRIL_2022, n=20_000, seed=0).tape
+    assert float(np.average(tape.rate, weights=tape.outstanding)) == pytest.approx(
+        0.0749, abs=0.0015
+    )
+
+
+def test_the_crossing_share_does_not_depend_on_the_ticket() -> None:
+    """The ticket is not period-sourced, so nothing the backtest tests may use it.
+
+    Income is derived from the EMI and the target debt service, so scaling every
+    loan scales the rupee totals and leaves debt service identical.
+    """
+    big = generate(APRIL_2022, n=5_000, seed=2).tape
+    small = generate(
+        APRIL_2022.model_copy(update={"home_ticket": 1_200_000.0}), n=5_000, seed=2
+    ).tape
+    assert np.allclose(big.borrower_dsti, small.borrower_dsti)
+    assert not np.allclose(big.outstanding, small.outstanding)
