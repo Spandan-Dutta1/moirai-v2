@@ -15,6 +15,8 @@ The design:
     condition   each bank's mean of the twelve monthly year-on-year
                 inflation rates in its own target measure, computed from
                 index levels where an index exists
+    vintage     a FRED index may name the ALFRED vintage it is read as of,
+                so a later revision cannot move a declared condition (ADR 032)
     reference   the same network with every bank at its inflation target
                 and a zero output gap
     solution    the simultaneous network equilibrium, sourced spillovers
@@ -74,9 +76,15 @@ SHORT = {
 
 @dataclass(frozen=True)
 class FredIndex:
-    """A price index on FRED; inflation is computed from its levels."""
+    """A price index on FRED; inflation is computed from its levels.
+
+    `vintage` is the date the index is read as of, through ALFRED. None reads
+    FRED's current vintage, which a revision can move after the condition was
+    declared.
+    """
 
     code: str
+    vintage: date | None = None
 
 
 @dataclass(frozen=True)
@@ -140,16 +148,26 @@ class HistoricalValidation:
 # ---- data ------------------------------------------------------------------
 
 
-def fetch(code: str, start: str, end: str) -> list[tuple[date, float]]:
+def fetch(
+    code: str, start: str, end: str, vintage: date | None = None
+) -> list[tuple[date, float]]:
+    """Observations from FRED; as published on `vintage` when one is given."""
+    options: dict[str, str] = {}
+    if vintage is not None:
+        options = {"realtime_start": vintage.isoformat(), "realtime_end": vintage.isoformat()}
     with FredAdapter() as fred:
-        series = fred.fetch_series(code, observation_start=start, observation_end=end)
+        series = fred.fetch_series(
+            code, observation_start=start, observation_end=end, **options
+        )
     periods, values = to_array(series)
     return [(p, float(v)) for p, v in zip(periods, values, strict=True) if v == v]
 
 
-def average_inflation(code: str, year: int) -> tuple[float, float, float]:
+def average_inflation(
+    code: str, year: int, vintage: date | None = None
+) -> tuple[float, float, float]:
     """Mean of monthly year-on-year rates, annual-average ratio, and peak."""
-    levels = dict(fetch(code, f"{year - 1}-01-01", f"{year}-12-31"))
+    levels = dict(fetch(code, f"{year - 1}-01-01", f"{year}-12-31", vintage))
     months = [date(year, m, 1) for m in range(1, 13)]
     prior = [date(year - 1, m, 1) for m in range(1, 13)]
     missing = [d for d in months + prior if d not in levels]
@@ -216,10 +234,12 @@ def run(spec: HistoricalValidation) -> None:
     for bank in spec.banks:
         source = spec.inflation[bank.name]
         if isinstance(source, FredIndex):
-            mean, annual, peak = average_inflation(source.code, year)
+            mean, annual, peak = average_inflation(source.code, year, source.vintage)
             measured[bank.name] = mean
             print(f"  {bank.name:<24} {source.code:<20} {mean:>9.2%} {annual:>8.2%} "
                   f"{peak:>7.2%}")
+            if source.vintage is not None:
+                print(f"    as published on {source.vintage} (ALFRED vintage)")
         elif isinstance(source, WarehouseYearOnYear):
             values = warehouse_year(source.series_id, year)
             measured[bank.name] = float(np.mean(values))

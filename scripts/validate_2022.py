@@ -7,6 +7,11 @@ fixed design in historical_validation.py. Two sources are not computed:
             (2.5 percent, Statistics Bureau, all items) is declared.
     UK      Bank Rate is not on FRED for 2022, so the published rates
             are declared and SONIA is printed as a cross-check.
+
+The three FRED price indices are read as published on 1 July 2026 (ADR 032).
+The declared conditions were computed from FRED between October 2025 and
+July 2026; FRED's annual revision of PCE in September 2026 moved the Fed's
+from 6.545% to 6.562%, and an unpinned read would now refuse the run.
 """
 
 from datetime import date
@@ -38,6 +43,9 @@ from moirai.engine.scenarios import (
 
 START, END = date(2022, 1, 1), date(2022, 12, 31)
 
+#: The ALFRED vintage the price indices are read as of (ADR 032).
+VINTAGE = date(2026, 7, 1)
+
 sonia = (
     fetch("IUDSOIA", "2021-12-01", START.isoformat())[-1][1],
     fetch("IUDSOIA", "2022-12-01", END.isoformat())[-1][1],
@@ -50,9 +58,9 @@ run(
         banks=JANUARY_2022_BANKS,
         observed_bp=OBSERVED_2022_MOVES_BP,
         inflation={
-            FED.name: FredIndex("PCEPI"),
-            ECB.name: FredIndex("CP0000EZ19M086NEST"),
-            BANK_OF_ENGLAND.name: FredIndex("GBRCPIALLMINMEI"),
+            FED.name: FredIndex("PCEPI", VINTAGE),
+            ECB.name: FredIndex("CP0000EZ19M086NEST", VINTAGE),
+            BANK_OF_ENGLAND.name: FredIndex("GBRCPIALLMINMEI", VINTAGE),
             BANK_OF_JAPAN.name: DeclaredInflation(
                 "Statistics Bureau of Japan, CPI all items; FRED's JPNCPIALLMINMEI "
                 "ends 2021-06"
