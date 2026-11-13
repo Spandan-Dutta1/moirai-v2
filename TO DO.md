@@ -1,4 +1,4 @@
-# CLAUDE.md
+
 
 Moirai traces a central bank rate decision through to individual households,
 in four layers: data fabric (0), policy games and causal VAR (1a/1b),
