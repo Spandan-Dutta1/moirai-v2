@@ -118,7 +118,13 @@ class EclParameters(BaseModel):
     dpd_stage_three: int = Field(
         default=90, ge=1, description="SOURCED. The NPA rule, as the backstop."
     )
-    apply_floors: bool = Field(default=True, description="Off to see the modelled loss on its own.")
+    apply_floors: bool = Field(
+        default=True,
+        description=(
+            "SWITCH, not a model value. Off to see the modelled loss without the "
+            "regulatory floor, which is how the floor's bite is measured."
+        ),
+    )
 
     def to_ledger_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

@@ -89,24 +89,55 @@ class BookProfile(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: str
-    portfolio: dict[Product, float] = Field(description="Outstanding by value, any units.")
-    eblr_share: float = Field(ge=0.0, le=1.0, description="EBLR share of floating loans.")
-    mean_dsti: float = Field(gt=0.0, lt=1.0, description="Average DSTI (FOIR).")
-    home_ticket: float = Field(default=AVERAGE_TICKET[Product.HOME], gt=0.0)
+    name: str = Field(description="METADATA. The book's name, used in its loan ids.")
+    portfolio: dict[Product, float] = Field(
+        description="SOURCED per profile. Outstanding by value, any units; see `source`."
+    )
+    eblr_share: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="SOURCED per profile. EBLR share of floating loans; see `source`.",
+    )
+    mean_dsti: float = Field(
+        gt=0.0,
+        lt=1.0,
+        description="SOURCED per profile. Average DSTI, the lender's FOIR; see `source`.",
+    )
+    home_ticket: float = Field(
+        default=AVERAGE_TICKET[Product.HOME],
+        gt=0.0,
+        description=(
+            "SOURCED per profile from CRIF originations, except april_2022, where it "
+            "is not period-sourced. It scales rupee totals and no tested share, which "
+            "test_the_crossing_share_does_not_depend_on_the_ticket pins."
+        ),
+    )
     repo_rate: float = Field(
-        default=REPO_RATE, gt=0.0, le=0.25, description="The policy rate on the book's date."
+        default=REPO_RATE,
+        gt=0.0,
+        le=0.25,
+        description="SOURCED per profile. The policy rate on the book's date (RBI).",
     )
     internal_reference_rate: float = Field(
         default=MEDIAN_MCLR,
         gt=0.0,
         le=0.25,
-        description="The internal benchmark MCLR loans are priced off.",
+        description=(
+            "SOURCED per profile. The internal benchmark MCLR loans are priced off "
+            "(RBI median MCLR), except april_2022, where it is DERIVED to reproduce "
+            "the published housing lending rate."
+        ),
     )
     eblr_spread: tuple[float, float] = Field(
-        default=(0.02, 0.0325), description="Range of spreads over the repo rate for EBLR loans."
+        default=(0.02, 0.0325),
+        description=(
+            "DERIVED. Range of spreads over the repo rate for EBLR loans, set so the "
+            "book reproduces the published weighted average lending rate."
+        ),
     )
-    source: str
+    source: str = Field(
+        description="METADATA. Where every sourced figure in this profile came from."
+    )
 
 
 PSB = BookProfile(

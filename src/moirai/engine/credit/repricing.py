@@ -120,10 +120,11 @@ class RepricingParameters(BaseModel):
         ge=-0.5,
         le=0.5,
         description=(
-            "Annual growth in borrower income over the horizon. Zero by default, "
-            "which is the conventional held-constant stress test. India's nominal "
-            "per capita income grew 12.3 percent in FY23 and 8.7 percent in FY24 "
-            "(MoSPI national accounts), so a backtest of that period needs this."
+            "CONVENTION. Annual growth in borrower income over the horizon. Zero "
+            "by default, which is the conventional held-constant stress test rather "
+            "than a claim about India. The backtest uses the growth that occurred: "
+            "nominal per capita income rose 12.3 percent in FY23 and 8.7 in FY24 "
+            "(MoSPI national accounts), and ADR 035 shows the default refuted."
         ),
     )
     dsti_threshold: float = Field(
