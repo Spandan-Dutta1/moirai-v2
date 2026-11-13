@@ -19,7 +19,9 @@ model, and they are what the August 2023 reset framework was about.
              or its longest tenure; where it would, the EMI rises instead.
 
 Then each month interest accrues on the outstanding principal and the EMI is
-paid. Income is held at the tape's value over the horizon.
+paid. Income grows at `income_growth` a year, zero by default: a rate shock is
+usually judged against an unchanged income, but over a two-year horizon that
+omits the force which dominated the 2022-23 tightening (ADR 035).
 
 Flags, per loan over the horizon:
 
@@ -111,6 +113,18 @@ class RepricingParameters(BaseModel):
             "SOURCED. 30 years at SBI and HDFC. Applied to the remaining tenure "
             "because the tape has no months on book, so it bounds an extension "
             "from above."
+        ),
+    )
+    income_growth: float = Field(
+        default=0.0,
+        ge=-0.5,
+        le=0.5,
+        description=(
+            "CONVENTION. Annual growth in borrower income over the horizon. Zero "
+            "by default, which is the conventional held-constant stress test rather "
+            "than a claim about India. The backtest uses the growth that occurred: "
+            "nominal per capita income rose 12.3 percent in FY23 and 8.7 in FY24 "
+            "(MoSPI national accounts), and ADR 035 shows the default refuted."
         ),
     )
     dsti_threshold: float = Field(
@@ -222,7 +236,8 @@ def reprice(
     def record(t: int) -> None:
         rate[:, t], emi[:, t], remaining[:, t], outstanding[:, t] = r, e, m, p
         total = np.bincount(borrower, weights=e)
-        dsti[:, t] = total[borrower] * 12.0 / tape.borrower_income
+        income = tape.borrower_income * (1.0 + parameters.income_growth) ** (t / 12.0)
+        dsti[:, t] = total[borrower] * 12.0 / income
 
     record(0)
     for t in range(1, horizon + 1):
