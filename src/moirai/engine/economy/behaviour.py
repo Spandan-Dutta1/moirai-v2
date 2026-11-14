@@ -45,7 +45,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from moirai.core.exceptions import EngineError
 from moirai.core.logging import get_logger
-from moirai.engine.economy.households import EmploymentStatus, Population
+from moirai.engine.economy.households import (
+    EmploymentStatus,
+    NonEmploymentIncomeParameters,
+    Population,
+)
 from moirai.engine.economy.shock_path import MacroVariable, ShockPath
 from moirai.engine.financial.commercial_banks import BankingSystem
 
@@ -78,6 +82,16 @@ MPC_HIGH_LIQUIDITY_FHN = 0.45
 #: stays at 0.70, below the source, as an assumption. ADR 017 reports how
 #: the headline moves across 0.70 to 1.0.
 MPC_LOW_LIQUIDITY_ASSUMED = 0.70
+
+#: The monthly rate at which an unemployed person in India finds work, from
+#: CMIE's Consumer Pyramids panel: 14 consecutive-wave transitions between
+#: 2019 and 2025, leaving out the four pairs touching 2020, when lockdown and
+#: a 48 per cent collapse in survey response cannot be told apart. Waves are
+#: four months apart, so the monthly rate is 1 - (1 - p)^(1/4), which assumes
+#: a constant hazard within the window and therefore understates it: exits
+#: are usually front-loaded. A lower bound, in other words, and still 6.1
+#: times below the 0.18 this replaced. ADR 039.
+CPHS_JOB_FINDING_RATE = 0.0293
 
 
 class BehaviourParameters(BaseModel):
@@ -141,12 +155,28 @@ class BehaviourParameters(BaseModel):
         ),
     )
     job_finding_rate: float = Field(
-        default=0.18,
+        default=CPHS_JOB_FINDING_RATE,
         gt=0.0,
         le=1.0,
-        description="Monthly probability an unemployed household finds work.",
+        description=(
+            "SOURCED. Monthly probability an unemployed household finds work, "
+            "measured on 14 consecutive-wave transitions of CMIE's Consumer "
+            "Pyramids panel, 2019-2025, excluding the four pairs touching "
+            "2020. The prior default of 0.18 was 6.1 times this, so an "
+            "employment shock died out far faster in the model than in Indian "
+            "data. See scripts/check_cphs_labour.py and ADR 039."
+        ),
     )
-    unemployment_income_replacement: float = Field(default=0.35, ge=0.0, le=1.0)
+    non_employment_income: NonEmploymentIncomeParameters = Field(
+        default_factory=NonEmploymentIncomeParameters,
+        description=(
+            "METADATA. A nested group rather than a value: income by "
+            "employment status, each share declaring its own provenance. The "
+            "same object the population is generated with, which replaces a "
+            "lone unemployment_income_replacement of 0.35 that disagreed with "
+            "generation's 0.25. ADR 038."
+        ),
+    )
 
     # ---- expectations ----
     expectation_learning_rate: float = Field(
@@ -404,10 +434,22 @@ def step(
     updated.employment[found_job] = EmploymentStatus.EMPLOYED
 
     # ---- income ----
+    # Income is derived from employment status rather than adjusted on the way
+    # in and out of work. Multiplying on job loss and dividing on job finding
+    # only cancels when both use the same figure and the household started in
+    # work: one generated unemployed at 0.25 and divided by 0.35 on finding a
+    # job landed on 0.71 of an identical household that never lost one, and
+    # stayed there. Scaling by the ratio of the two statuses' shares is
+    # correct for every transition, including that one, and needs no guard
+    # against dividing by zero. ADR 038.
     growth = 1.0 + income_growth / 12.0  # annual rate applied monthly
-    updated.income = population.income * growth
-    updated.income[lost_job] *= parameters.unemployment_income_replacement
-    updated.income[found_job] /= max(parameters.unemployment_income_replacement, 1e-6)
+    shares = parameters.non_employment_income.shares
+    updated.income = (
+        population.income
+        * growth
+        * shares(updated.employment)
+        / shares(population.employment)
+    )
 
     # ---- interest flows, priced by the banking layer ----
     lending, baseline_lending, deposit = bank_rates(policy_rate, baseline_rate, banks)

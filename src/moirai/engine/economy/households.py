@@ -60,6 +60,110 @@ LENDER_FOIR_LIMIT = 0.50
 #: 0.50 / 0.1186 = 4.22 times income uses half of it.
 LENDER_DEBT_TO_INCOME_CAP = 4.22
 
+#: Measured on CMIE's Consumer Pyramids panel, 2021-2026: the income a
+#: single-earner household keeps when its earner loses work, against
+#: single-earner households whose earner stayed employed, over the four months
+#: each CPHS interview asks about. 1,615 job losses against 784,784 controls.
+#: See scripts/check_cphs_replacement.py and ADR 040.
+CPHS_HOUSEHOLD_INCOME_SHARE = 0.83
+
+#: The same estimate run on wage income alone gives 0.598, and 0.572 on the
+#: narrower window. That reproduces the 43 percent drop in individual earnings
+#: published in "Coping with labor market risk: formal job loss and earnings
+#: dynamics in India", Economic Modelling (2025), on this same panel - a
+#: figure the estimate was never fitted to, which is why it is kept here as
+#: the check that the method is sound rather than as a model value.
+CPHS_WAGE_SHARE = 0.598
+
+#: What a household keeps, which is what this model needs: it scales total
+#: household income, and total income falls by far less than wages because
+#: pension, rent, business income and transfers do not stop when a job does.
+#: ADR 038 used the wage figure on the argument that a Moirai household's one
+#: income is its earner's earnings. That argument was wrong, and this panel is
+#: what shows it: even among households with exactly one earner, the closest
+#: real analogue to a Moirai household, total income falls only to 0.83.
+UNEMPLOYED_EARNINGS_SHARE_INDIA = CPHS_HOUSEHOLD_INCOME_SHARE
+
+
+class NonEmploymentIncomeParameters(BaseModel):
+    """Income by employment status, as a share of the same household in work.
+
+    One object, so that generation and simulation cannot disagree. They did:
+    0.25 at generation against 0.35 in behaviour, with neither declared as a
+    parameter. The three literals in `generate_population` were invisible to
+    the documentation generator, so they were not even among the undeclared
+    parameters it reports.
+
+    The inconsistency was not only cosmetic. The behaviour layer multiplied
+    income by its own figure on job loss and divided by the same figure on job
+    finding, so a household generated unemployed at 0.25 that later found work
+    landed on 0.25 / 0.35 = 0.71 of an identical household that never lost a
+    job, and stayed there. The repair is to derive income from status rather
+    than to apply and reverse a factor; see `shares`.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    unemployed: float = Field(
+        default=UNEMPLOYED_EARNINGS_SHARE_INDIA,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "SOURCED. What a single-earner household keeps when its earner "
+            "loses work, measured on CMIE's Consumer Pyramids panel over "
+            "2021-2026: 1,615 job losses against single-earner controls. "
+            "Wages fall to 0.60, but total household income only to 0.83, "
+            "because pension, rent, business income and transfers continue. "
+            "India has no general unemployment insurance; ESIC reaches only "
+            "insured formal workers. ADR 040 supersedes the 0.57 of ADR 038."
+        ),
+    )
+    retired: float = Field(
+        default=0.45,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "ASSUMED. A pension replacement rate for India could not be "
+            "sourced: the OECD's Pensions at a Glance tables did not serve "
+            "their data and its India country note refuses retrieval. Kept at "
+            "its prior value rather than replaced by a worse-grounded one, and "
+            "declared rather than left as a literal. ADR 038."
+        ),
+    )
+    out_of_labour_force: float = Field(
+        default=0.30,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "ASSUMED. Covers students, homemakers and the discouraged, whose "
+            "income sources differ too much for any one published rate to "
+            "apply. Kept at its prior value and declared. ADR 038."
+        ),
+    )
+
+    def shares(self, employment: np.ndarray) -> np.ndarray:
+        """The income share for each household, given its employment status.
+
+        A lookup indexed by the status integer, so the whole population is one
+        gather rather than one pass per status. Employment itself is 1.0, which
+        is what makes every other entry a share of being in work.
+
+        Every share is strictly positive, which is why the behaviour layer can
+        divide by this without a guard. A share of exactly zero would make a
+        household that leaves that status unrecoverable - its income would
+        already be zero, and the ratio that restores it undefined - so it is
+        refused at construction rather than papered over at runtime with the
+        `max(..., 1e-6)` this replaced.
+        """
+        table = np.ones(len(EmploymentStatus), dtype=float)
+        table[EmploymentStatus.UNEMPLOYED] = self.unemployed
+        table[EmploymentStatus.RETIRED] = self.retired
+        table[EmploymentStatus.OUT_OF_LABOUR_FORCE] = self.out_of_labour_force
+        return cast(np.ndarray, table[employment])
+
+    def to_ledger_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
 
 class PopulationParameters(BaseModel):
     """Calibration for generating a synthetic population.
@@ -152,6 +256,15 @@ class PopulationParameters(BaseModel):
         ),
     )
     out_of_labour_force_rate: float = Field(default=0.35, ge=0.0, le=0.9)
+    non_employment_income: NonEmploymentIncomeParameters = Field(
+        default_factory=NonEmploymentIncomeParameters,
+        description=(
+            "METADATA. A nested group rather than a value: income by "
+            "employment status, each share declaring its own provenance. The "
+            "behaviour layer takes the same object, so the two cannot drift "
+            "apart again. ADR 038."
+        ),
+    )
 
     # ---- beliefs and preferences ----
     initial_expected_inflation: float = Field(default=0.05, ge=-0.1, le=0.5)
@@ -469,10 +582,10 @@ def generate_population(parameters: PopulationParameters | None = None) -> Popul
         & (draw < inactive_cutoff)
     ] = EmploymentStatus.OUT_OF_LABOUR_FORCE
 
-    # Retirement and unemployment reduce income.
-    income[employment == EmploymentStatus.RETIRED] *= 0.45
-    income[employment == EmploymentStatus.UNEMPLOYED] *= 0.25
-    income[employment == EmploymentStatus.OUT_OF_LABOUR_FORCE] *= 0.30
+    # Not working reduces income, by a share that depends on why. One object
+    # holds those shares and the behaviour layer takes the same one, so a
+    # household's income means the same thing at generation and in simulation.
+    income = income * parameters.non_employment_income.shares(employment)
 
     # ---- debt ----
     # Borrowing is hump-shaped in income. The poorest are credit
