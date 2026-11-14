@@ -1,5 +1,4 @@
-"""
-The model against published estimates, link by link (Stage 6, ADR 037).
+"""The model against published estimates, link by link (Stage 6, ADR 037).
 
 Every other check here asks whether the engine computes what it says it
 computes. This one asks a different question: whether what it computes is the

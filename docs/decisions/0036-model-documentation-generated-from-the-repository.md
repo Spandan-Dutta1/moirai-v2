@@ -92,3 +92,49 @@ fields, and several of them are already open findings under other names:
   that matters. Until then the gap is in the document rather than in prose.
 - A validator reading this document can reach every number's origin without
   reading the code, and can see what the project does not know.
+
+## Amendment, 14 November 2026
+
+This record told the reader to redirect the script's output:
+
+    python scripts/model_documentation.py > docs/model_documentation.md
+
+That instruction was wrong on Windows, and it defeated the purpose of the
+record. PowerShell's `>` writes UTF-16LE. The NUL bytes in UTF-16 make git
+classify the file as binary, so both commits of the document reported
+`1 file changed, 0 insertions(+), 0 deletions(-)` and the diff read
+`Bin 46042 -> 46184 bytes`. A document generated so that it could not drift
+from the code was committed in a form that cannot be diffed, reviewed or
+blamed - unreadable in the one place it exists to be read. It went unnoticed
+for a day because the committed file was never opened from git, only
+regenerated.
+
+Two changes:
+
+1. **The script writes the file**, given a path, and prints only when not:
+
+       python scripts/model_documentation.py docs/model_documentation.md
+
+   `write()` encodes UTF-8 with no byte-order mark and LF endings, so the
+   calling shell cannot decide the encoding. Tests assert exactly that on the
+   written bytes - no NUL, no BOM, no CRLF - and that printing and writing
+   produce the same text.
+2. **An unreadable module is collected rather than printed mid-stream.**
+   Point 2 of the decision promised that such a module is reported in the
+   output; with the document now built as text, a `print` from inside the
+   module walk would have gone to the terminal instead of into the file. The
+   names are collected in `UNREADABLE` and written into the document, with a
+   test.
+
+Also corrected, found by the same comparison run: `evidence()` took the first
+line of each script's docstring literally, so `check_benchmarks.py`, whose
+docstring opened on the line after its quotes, got an empty description in the
+table. It now takes the first non-empty line, and
+`test_every_evidence_script_says_what_it_checks` fails on any blank cell. The
+old test checked a single script, which is why one got through - a document
+that reports the project's gaps cannot carry one of its own.
+
+The lesson is narrower than it looks. Every control in this record worked on
+the content and none on the artefact: the encoding, the line endings and the
+blank cell were all outside what any test looked at. The checks now cover the
+bytes that get committed, not only the text that gets generated.

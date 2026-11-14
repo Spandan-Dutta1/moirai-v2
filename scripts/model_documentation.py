@@ -1,5 +1,4 @@
-"""
-Model documentation, generated from the repository itself (Stage 6).
+"""Model documentation, generated from the repository itself (Stage 6).
 
 A model validator asks four things: what does it claim, what did you decide
 and why, where did every number come from, and what evidence do you have. The
@@ -15,10 +14,17 @@ A field whose description declares nothing is reported as a gap rather than
 quietly passed over, and `test_every_parameter_declares_its_provenance` fails
 when one appears.
 
-Prints to standard output, like every other script here. Redirect it to keep a
-copy:
+Writes the file itself when given a path, and prints to standard output when
+not:
 
-    python scripts/model_documentation.py > docs/model_documentation.md
+    python scripts/model_documentation.py docs/model_documentation.md
+
+It writes rather than being redirected because PowerShell's `>` defaults to
+UTF-16LE, whose NUL bytes make git treat the result as a binary file. The
+document was committed that way from 13 to 14 November 2026: it diffed as
+`Bin 46042 -> 46184 bytes`, which is unreviewable, in a document whose whole
+purpose is to be read. Writing it here fixes the encoding in one place
+instead of in every shell that calls it.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import re
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -107,15 +114,21 @@ def decisions() -> list[Decision]:
     return found
 
 
+#: Modules that could not be imported, reported in the document rather than
+#: passed over. Filled by `_modules`, read by `main`.
+UNREADABLE: list[str] = []
+
+
 def _modules() -> list[Any]:
     """Every importable module of the engine, so nothing is missed by hand."""
     package = importlib.import_module("moirai")
     loaded = [package]
+    UNREADABLE.clear()
     for info in pkgutil.walk_packages(package.__path__, prefix="moirai."):
         try:
             loaded.append(importlib.import_module(info.name))
         except Exception as err:  # a module that cannot be imported is reported
-            print(f"<!-- could not read {info.name}: {type(err).__name__}: {err} -->")
+            UNREADABLE.append(f"{info.name}: {type(err).__name__}: {err}")
     return loaded
 
 
@@ -182,87 +195,122 @@ def test_count() -> int:
 
 
 def evidence() -> list[tuple[str, str]]:
-    """The check scripts, with the first line of each docstring."""
+    """The check scripts, with the first written line of each docstring.
+
+    The first *non-empty* line, because a docstring may open on the line
+    after its quotes. Taking the first line literally printed an empty cell
+    for `check_benchmarks.py` - the silent gap this script exists to
+    prevent. `test_every_evidence_script_says_what_it_checks` now fails
+    rather than letting one through.
+    """
     register: list[tuple[str, str]] = []
     for path in sorted(SCRIPTS.glob("check_*.py")):
         text = path.read_text(encoding="utf-8")
-        match = re.search(r'^"""(.*?)(?:\n|""")', text, re.S)
-        first = match.group(1).strip() if match else ""
+        match = re.match(r'\s*"""(.*?)"""', text, re.S)
+        body = match.group(1) if match else ""
+        first = next((line for line in body.splitlines() if line.strip()), "")
         register.append((path.name, " ".join(first.split())))
     return register
 
 
-def main() -> None:
+def document() -> str:
+    """The whole document as text, with LF endings and a trailing newline."""
+    fields = parameters()  # before anything reads UNREADABLE, which it fills
     records = decisions()
-    fields = parameters()
     counts: dict[str, int] = {}
     for field in fields:
         counts[field.provenance] = counts.get(field.provenance, 0) + 1
     gaps = [f for f in fields if f.provenance == UNLABELLED]
 
-    print("# Moirai: model documentation")
-    print()
-    print(f"Generated from the repository on {date.today().isoformat()}. Do not edit:")
-    print("regenerate with `python scripts/model_documentation.py`.")
-    print()
-    print(
+    lines: list[str] = []
+    say = lines.append
+
+    say("# Moirai: model documentation")
+    say("")
+    say(f"Generated from the repository on {date.today().isoformat()}. Do not edit:")
+    say("regenerate with `python scripts/model_documentation.py <path>`.")
+    say("")
+    say(
         f"{len(records)} decision records, {len(fields)} declared parameters, "
         f"{test_count()} test functions, {len(evidence())} evidence scripts."
     )
-    print()
+    say("")
 
-    print("## 1. Scope and intended use")
-    print()
-    print(SCOPE)
-    print()
+    for note in UNREADABLE:
+        say(f"<!-- could not read {note} -->")
+    if UNREADABLE:
+        say("")
 
-    print("## 2. Provenance of every declared parameter")
-    print()
+    say("## 1. Scope and intended use")
+    say("")
+    say(SCOPE)
+    say("")
+
+    say("## 2. Provenance of every declared parameter")
+    say("")
     order = [*(p.lower() for p in PROVENANCE), UNLABELLED]
     summary = ", ".join(f"{counts[k]} {k}" for k in order if counts.get(k))
-    print(f"{summary}.")
-    print()
-    print("| Owner | Parameter | Default | Provenance | Declared as |")
-    print("|---|---|---|---|---|")
+    say(f"{summary}.")
+    say("")
+    say("| Owner | Parameter | Default | Provenance | Declared as |")
+    say("|---|---|---|---|---|")
     for field in fields:
-        print(
+        say(
             f"| `{field.owner}` | `{field.name}` | `{field.default}` "
             f"| {field.provenance} | {field.description} |"
         )
-    print()
+    say("")
 
-    print("## 3. Decisions, and why")
-    print()
-    print("| # | Decision | Status |")
-    print("|---|---|---|")
+    say("## 3. Decisions, and why")
+    say("")
+    say("| # | Decision | Status |")
+    say("|---|---|---|")
     for record in records:
-        print(f"| {record.number:03d} | {record.title} | {record.status} |")
-    print()
+        say(f"| {record.number:03d} | {record.title} | {record.status} |")
+    say("")
 
-    print("## 4. Evidence")
-    print()
-    print("Each script recomputes a result from the data and prints it. Every change")
-    print("is compared against the previous version before it merges.")
-    print()
-    print("| Script | What it checks |")
-    print("|---|---|")
+    say("## 4. Evidence")
+    say("")
+    say("Each script recomputes a result from the data and prints it. Every change")
+    say("is compared against the previous version before it merges.")
+    say("")
+    say("| Script | What it checks |")
+    say("|---|---|")
     for name, first in evidence():
-        print(f"| `{name}` | {first} |")
-    print()
+        say(f"| `{name}` | {first} |")
+    say("")
 
-    print("## 5. Known gaps")
-    print()
+    say("## 5. Known gaps")
+    say("")
     if gaps:
         for field in gaps:
-            print(f"- `{field.owner}.{field.name}` declares no provenance")
+            say(f"- `{field.owner}.{field.name}` declares no provenance")
     else:
-        print("Every declared parameter states where its value came from.")
-    print()
-    print("Gaps recorded in the decision records rather than here: the central banks'")
-    print("preference weights are chosen rather than estimated; the India layer inherits")
-    print("a response shape estimated on United States data; the household layer is not")
-    print("matched to Indian survey data; the credit layer has no arrears channel, so a")
-    print("synthetic book has no Stage 3 exposure and the 30-day trigger cannot fire.")
+        say("Every declared parameter states where its value came from.")
+    say("")
+    say("Gaps recorded in the decision records rather than here: the central banks'")
+    say("preference weights are chosen rather than estimated; the India layer inherits")
+    say("a response shape estimated on United States data; the household layer is not")
+    say("matched to Indian survey data; the credit layer has no arrears channel, so a")
+    say("synthetic book has no Stage 3 exposure and the 30-day trigger cannot fire.")
+
+    return "\n".join(lines) + "\n"
+
+
+def write(destination: Path, text: str) -> None:
+    """UTF-8, no byte-order mark, LF endings, whichever shell called this."""
+    destination.write_bytes(text.encode("utf-8"))
+
+
+def main(argv: list[str] | None = None) -> None:
+    text = document()
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments:
+        destination = Path(arguments[0])
+        write(destination, text)
+        print(f"wrote {destination}: {len(text.encode('utf-8'))} bytes, utf-8, lf")
+    else:
+        print(text, end="")
 
 
 if __name__ == "__main__":
